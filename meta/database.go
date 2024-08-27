@@ -86,7 +86,36 @@ func (d *Database) CreateTable(ctx *sql.Context, name string, schema sql.Primary
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	// TODO: support primary keys, collation, and comment
+	var columns []string
+	for _, col := range schema.Schema {
+		colDef := fmt.Sprintf("%s %s", col.Name, duckdbDataType(col.Type))
+		if col.Nullable {
+			colDef += " NULL"
+		} else {
+			colDef += " NOT NULL"
+		}
+		columns = append(columns, colDef)
+	}
+
+	createTableSQL := fmt.Sprintf("CREATE TABLE %s (%s", name, strings.Join(columns, ", "))
+
+	var primaryKeys []string
+	for pkord := range schema.PkOrdinals {
+		primaryKeys = append(primaryKeys, schema.Schema[pkord].Name)
+	}
+
+	if len(primaryKeys) > 0 {
+		createTableSQL += fmt.Sprintf(", PRIMARY KEY (%s)", strings.Join(primaryKeys, ", "))
+	}
+
+	createTableSQL += ")"
+	_, err := d.engine.Exec(fmt.Sprintf("USE %s; %s", d.name, createTableSQL))
+	if err != nil {
+		return err
+	}
+
+	// TODO: support collation and comment
+
 	return nil
 }
 

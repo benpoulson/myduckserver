@@ -1,8 +1,14 @@
 package meta
 
-import "github.com/dolthub/go-mysql-server/sql"
+import (
+	"fmt"
+	"sync"
+
+	"github.com/dolthub/go-mysql-server/sql"
+)
 
 type Table struct {
+	mu   *sync.RWMutex
 	name string
 	db   *Database
 }
@@ -11,7 +17,10 @@ var _ sql.Table = (*Table)(nil)
 var _ sql.AlterableTable = (*Table)(nil)
 
 func NewTable(name string, db *Database) *Table {
-	return &Table{name: name, db: db}
+	return &Table{
+		mu:   &sync.RWMutex{},
+		name: name,
+		db:   db}
 }
 
 // Collation implements sql.Table.
@@ -36,7 +45,39 @@ func (t *Table) Partitions(*sql.Context) (sql.PartitionIter, error) {
 
 // Schema implements sql.Table.
 func (t *Table) Schema() sql.Schema {
-	panic("unimplemented")
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	rows, err := t.db.engine.Query(`
+		SELECT column_name, data_type, is_nullable FROM duckdb_columns() WHERE schema_name = ? AND table_name = ?
+	`, t.db.name, t.name)
+	if err != nil {
+		panic(err)
+	}
+	defer rows.Close()
+
+	var schema sql.Schema
+	for rows.Next() {
+		var columnName, dataType string
+		var isNullable bool
+		if err := rows.Scan(&columnName, &dataType, &isNullable); err != nil {
+			return nil
+		}
+
+		column := &sql.Column{
+			Name:     columnName,
+			Type:     mysqlDateType(dataType),
+			Nullable: isNullable,
+		}
+
+		schema = append(schema, column)
+	}
+
+	if err := rows.Err(); err != nil {
+		panic(err)
+	}
+
+	return schema
 }
 
 // String implements sql.Table.
@@ -46,20 +87,83 @@ func (t *Table) String() string {
 
 // AddColumn implements sql.AlterableTable.
 func (t *Table) AddColumn(ctx *sql.Context, column *sql.Column, order *sql.ColumnOrder) error {
-	panic("unimplemented")
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	sql := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s",
+		t.name,
+		column.Name,
+		duckdbDataType(column.Type))
+
+	if !column.Nullable {
+		sql += " NOT NULL"
+	}
+
+	if column.Default != nil {
+		sql += fmt.Sprintf(" DEFAULT %s", column.Default.String())
+	}
+
+	_, err := t.db.engine.Exec(sql)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // DropColumn implements sql.AlterableTable.
 func (t *Table) DropColumn(ctx *sql.Context, columnName string) error {
-	panic("unimplemented")
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	sql := fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s", t.name, columnName)
+
+	_, err := t.db.engine.Exec(sql)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // ModifyColumn implements sql.AlterableTable.
 func (t *Table) ModifyColumn(ctx *sql.Context, columnName string, column *sql.Column, order *sql.ColumnOrder) error {
-	panic("unimplemented")
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	sql := fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s", t.name, columnName)
+
+	sql += fmt.Sprintf(" SET DATA TYPE %s", duckdbDataType(column.Type))
+
+	if column.Nullable {
+		sql += " DROP NOT NULL"
+	} else {
+		sql += " SET NOT NULL"
+	}
+
+	if column.Default != nil {
+		sql += fmt.Sprintf(" SET DEFAULT %s", column.Default.String())
+	} else {
+		sql += " DROP DEFAULT"
+	}
+
+	_, err := t.db.engine.Exec(sql)
+	if err != nil {
+		return err
+	}
+
+	if columnName != column.Name {
+		renameSQL := fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s", t.name, columnName, column.Name)
+		_, err = t.db.engine.Exec(renameSQL)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Updater implements sql.AlterableTable.
-func (t *Table) Updater(ctx *sql.Context) sql.RowUpdater {
+func (t *Table) Updater(*sql.Context) sql.RowUpdater {
 	panic("unimplemented")
 }
