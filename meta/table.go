@@ -1,6 +1,7 @@
 package meta
 
 import (
+	stdsql "database/sql"
 	"fmt"
 	"sync"
 
@@ -49,7 +50,7 @@ func (t *Table) Schema() sql.Schema {
 	defer t.mu.RUnlock()
 
 	rows, err := t.db.engine.Query(`
-		SELECT column_name, data_type, is_nullable FROM duckdb_columns() WHERE schema_name = ? AND table_name = ?
+		SELECT column_name, data_type, is_nullable, numeric_precision, numeric_scale FROM duckdb_columns() WHERE schema_name = ? AND table_name = ?
 	`, t.db.name, t.name)
 	if err != nil {
 		panic(ErrDuckDB.New(err))
@@ -60,13 +61,14 @@ func (t *Table) Schema() sql.Schema {
 	for rows.Next() {
 		var columnName, dataType string
 		var isNullable bool
-		if err := rows.Scan(&columnName, &dataType, &isNullable); err != nil {
+		var numericPrecision, numericScale stdsql.NullInt32
+		if err := rows.Scan(&columnName, &dataType, &isNullable, &numericPrecision, &numericScale); err != nil {
 			panic(ErrDuckDB.New(err))
 		}
 
 		column := &sql.Column{
 			Name:     columnName,
-			Type:     mysqlDateType(dataType),
+			Type:     mysqlDataType(dataType, uint8(numericPrecision.Int32), uint8(numericScale.Int32)),
 			Nullable: isNullable,
 		}
 
@@ -90,10 +92,12 @@ func (t *Table) AddColumn(ctx *sql.Context, column *sql.Column, order *sql.Colum
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	sql := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s",
-		t.name,
-		column.Name,
-		duckdbDataType(column.Type))
+	typ, err := duckdbDataType(column.Type)
+	if err != nil {
+		return err
+	}
+
+	sql := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", t.name, column.Name, typ)
 
 	if !column.Nullable {
 		sql += " NOT NULL"
@@ -103,7 +107,7 @@ func (t *Table) AddColumn(ctx *sql.Context, column *sql.Column, order *sql.Colum
 		sql += fmt.Sprintf(" DEFAULT %s", column.Default.String())
 	}
 
-	_, err := t.db.engine.Exec(sql)
+	_, err = t.db.engine.Exec(sql)
 	if err != nil {
 		return ErrDuckDB.New(err)
 	}
@@ -133,7 +137,12 @@ func (t *Table) ModifyColumn(ctx *sql.Context, columnName string, column *sql.Co
 
 	sql := fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s", t.name, columnName)
 
-	sql += fmt.Sprintf(" SET DATA TYPE %s", duckdbDataType(column.Type))
+	typ, err := duckdbDataType(column.Type)
+	if err != nil {
+		return err
+	}
+
+	sql += fmt.Sprintf(" SET DATA TYPE %s", typ)
 
 	if column.Nullable {
 		sql += " DROP NOT NULL"
@@ -147,7 +156,7 @@ func (t *Table) ModifyColumn(ctx *sql.Context, columnName string, column *sql.Co
 		sql += " DROP DEFAULT"
 	}
 
-	_, err := t.db.engine.Exec(sql)
+	_, err = t.db.engine.Exec(sql)
 	if err != nil {
 		return ErrDuckDB.New(err)
 	}

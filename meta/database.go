@@ -88,7 +88,11 @@ func (d *Database) CreateTable(ctx *sql.Context, name string, schema sql.Primary
 
 	var columns []string
 	for _, col := range schema.Schema {
-		colDef := fmt.Sprintf("%s %s", col.Name, duckdbDataType(col.Type))
+		typ, err := duckdbDataType(col.Type)
+		if err != nil {
+			return err
+		}
+		colDef := fmt.Sprintf("%s %s", col.Name, typ)
 		if col.Nullable {
 			colDef += " NULL"
 		} else {
