@@ -61,7 +61,7 @@ func (d *Database) GetTableInsensitive(ctx *sql.Context, tblName string) (sql.Ta
 func (d *Database) tablesInsensitive() (map[string]sql.Table, error) {
 	rows, err := d.engine.Query("SELECT DISTINCT table_name FROM duckdb_tables() where schema_name = ?", d.name)
 	if err != nil {
-		return nil, err
+		return nil, ErrDuckDB.New(err)
 	}
 	defer rows.Close()
 
@@ -69,7 +69,7 @@ func (d *Database) tablesInsensitive() (map[string]sql.Table, error) {
 	for rows.Next() {
 		var tblName string
 		if err := rows.Scan(&tblName); err != nil {
-			return nil, err
+			return nil, ErrDuckDB.New(err)
 		}
 		tbls[strings.ToLower(tblName)] = NewTable(tblName, d)
 	}
@@ -111,7 +111,7 @@ func (d *Database) CreateTable(ctx *sql.Context, name string, schema sql.Primary
 	createTableSQL += ")"
 	_, err := d.engine.Exec(fmt.Sprintf("USE %s; %s", d.name, createTableSQL))
 	if err != nil {
-		return err
+		return ErrDuckDB.New(err)
 	}
 
 	// TODO: support collation and comment
@@ -125,7 +125,7 @@ func (d *Database) DropTable(ctx *sql.Context, name string) error {
 	defer d.mu.Unlock()
 
 	_, err := d.engine.Exec(fmt.Sprintf(`USE %s; DROP TABLE "%s"`, d.name, name))
-	return err
+	return ErrDuckDB.New(err)
 }
 
 // RenameTable implements sql.TableRenamer.
@@ -134,5 +134,5 @@ func (d *Database) RenameTable(ctx *sql.Context, oldName string, newName string)
 	defer d.mu.Unlock()
 
 	_, err := d.engine.Exec(fmt.Sprintf(`USE %s; ALTER TABLE "%s" RENAME TO "%s"`, d.name, oldName, newName))
-	return err
+	return ErrDuckDB.New(err)
 }

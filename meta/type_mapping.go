@@ -11,6 +11,6 @@ func duckdbDataType(t sql.Type) string {
 }
 
 // TODO: implement it
-func mysqlDateType(t string) sql.Type {
+func mysqlDateType(string) sql.Type {
 	return types.StringType{}
 }

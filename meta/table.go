@@ -34,13 +34,13 @@ func (t *Table) Name() string {
 }
 
 // PartitionRows implements sql.Table.
-func (t *Table) PartitionRows(*sql.Context, sql.Partition) (sql.RowIter, error) {
-	panic("unimplemented")
+func (t *Table) PartitionRows(ctx *sql.Context, _ sql.Partition) (sql.RowIter, error) {
+	return nil, fmt.Errorf("unimplemented (table: %s, query: %s)", t.name, ctx.Query())
 }
 
 // Partitions implements sql.Table.
-func (t *Table) Partitions(*sql.Context) (sql.PartitionIter, error) {
-	panic("unimplemented")
+func (t *Table) Partitions(ctx *sql.Context) (sql.PartitionIter, error) {
+	return nil, fmt.Errorf("unimplemented (table: %s, query: %s)", t.name, ctx.Query())
 }
 
 // Schema implements sql.Table.
@@ -52,7 +52,7 @@ func (t *Table) Schema() sql.Schema {
 		SELECT column_name, data_type, is_nullable FROM duckdb_columns() WHERE schema_name = ? AND table_name = ?
 	`, t.db.name, t.name)
 	if err != nil {
-		panic(err)
+		panic(ErrDuckDB.New(err))
 	}
 	defer rows.Close()
 
@@ -61,7 +61,7 @@ func (t *Table) Schema() sql.Schema {
 		var columnName, dataType string
 		var isNullable bool
 		if err := rows.Scan(&columnName, &dataType, &isNullable); err != nil {
-			return nil
+			panic(ErrDuckDB.New(err))
 		}
 
 		column := &sql.Column{
@@ -74,7 +74,7 @@ func (t *Table) Schema() sql.Schema {
 	}
 
 	if err := rows.Err(); err != nil {
-		panic(err)
+		panic(ErrDuckDB.New(err))
 	}
 
 	return schema
@@ -105,7 +105,7 @@ func (t *Table) AddColumn(ctx *sql.Context, column *sql.Column, order *sql.Colum
 
 	_, err := t.db.engine.Exec(sql)
 	if err != nil {
-		return err
+		return ErrDuckDB.New(err)
 	}
 
 	return nil
@@ -120,7 +120,7 @@ func (t *Table) DropColumn(ctx *sql.Context, columnName string) error {
 
 	_, err := t.db.engine.Exec(sql)
 	if err != nil {
-		return err
+		return ErrDuckDB.New(err)
 	}
 
 	return nil
@@ -149,14 +149,14 @@ func (t *Table) ModifyColumn(ctx *sql.Context, columnName string, column *sql.Co
 
 	_, err := t.db.engine.Exec(sql)
 	if err != nil {
-		return err
+		return ErrDuckDB.New(err)
 	}
 
 	if columnName != column.Name {
 		renameSQL := fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s", t.name, columnName, column.Name)
 		_, err = t.db.engine.Exec(renameSQL)
 		if err != nil {
-			return err
+			return ErrDuckDB.New(err)
 		}
 	}
 
@@ -164,6 +164,6 @@ func (t *Table) ModifyColumn(ctx *sql.Context, columnName string, column *sql.Co
 }
 
 // Updater implements sql.AlterableTable.
-func (t *Table) Updater(*sql.Context) sql.RowUpdater {
-	panic("unimplemented")
+func (t *Table) Updater(ctx *sql.Context) sql.RowUpdater {
+	panic(fmt.Sprintf("unimplemented (table: %s, query: %s)", t.name, ctx.Query()))
 }
