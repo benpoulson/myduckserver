@@ -92,16 +92,21 @@ func (d *Database) CreateTable(ctx *sql.Context, name string, schema sql.Primary
 		if err != nil {
 			return err
 		}
-		colDef := fmt.Sprintf("%s %s", col.Name, typ)
+		colDef := fmt.Sprintf(`"%s" %s`, col.Name, typ)
 		if col.Nullable {
 			colDef += " NULL"
 		} else {
 			colDef += " NOT NULL"
 		}
+
+		if col.Default != nil {
+			colDef += " DEFAULT " + col.Default.String()
+		}
+
 		columns = append(columns, colDef)
 	}
 
-	createTableSQL := fmt.Sprintf("CREATE TABLE %s (%s", name, strings.Join(columns, ", "))
+	createTableSQL := fmt.Sprintf(`CREATE TABLE "%s"."%s" (%s`, d.name, name, strings.Join(columns, ", "))
 
 	var primaryKeys []string
 	for pkord := range schema.PkOrdinals {
@@ -113,7 +118,7 @@ func (d *Database) CreateTable(ctx *sql.Context, name string, schema sql.Primary
 	}
 
 	createTableSQL += ")"
-	_, err := d.engine.Exec(fmt.Sprintf("USE %s; %s", d.name, createTableSQL))
+	_, err := d.engine.Exec(createTableSQL)
 	if err != nil {
 		return ErrDuckDB.New(err)
 	}
@@ -128,8 +133,12 @@ func (d *Database) DropTable(ctx *sql.Context, name string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	_, err := d.engine.Exec(fmt.Sprintf(`USE %s; DROP TABLE "%s"`, d.name, name))
-	return ErrDuckDB.New(err)
+	_, err := d.engine.Exec(fmt.Sprintf(`DROP TABLE "%s"."%s"`, d.name, name))
+
+	if err != nil {
+		return ErrDuckDB.New(err)
+	}
+	return nil
 }
 
 // RenameTable implements sql.TableRenamer.
@@ -137,6 +146,9 @@ func (d *Database) RenameTable(ctx *sql.Context, oldName string, newName string)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	_, err := d.engine.Exec(fmt.Sprintf(`USE %s; ALTER TABLE "%s" RENAME TO "%s"`, d.name, oldName, newName))
-	return ErrDuckDB.New(err)
+	_, err := d.engine.Exec(fmt.Sprintf(`ALTER TABLE "%s"."%s" RENAME TO "%s"`, d.name, oldName, newName))
+	if err != nil {
+		return ErrDuckDB.New(err)
+	}
+	return nil
 }

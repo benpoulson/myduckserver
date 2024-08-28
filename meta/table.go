@@ -36,12 +36,12 @@ func (t *Table) Name() string {
 
 // PartitionRows implements sql.Table.
 func (t *Table) PartitionRows(ctx *sql.Context, _ sql.Partition) (sql.RowIter, error) {
-	return nil, fmt.Errorf("unimplemented (table: %s, query: %s)", t.name, ctx.Query())
+	return nil, fmt.Errorf("unimplemented(PartitionRows) (table: %s, query: %s)", t.name, ctx.Query())
 }
 
 // Partitions implements sql.Table.
 func (t *Table) Partitions(ctx *sql.Context) (sql.PartitionIter, error) {
-	return nil, fmt.Errorf("unimplemented (table: %s, query: %s)", t.name, ctx.Query())
+	return nil, fmt.Errorf("unimplemented(Partitions) (table: %s, query: %s)", t.name, ctx.Query())
 }
 
 // Schema implements sql.Table.
@@ -50,7 +50,7 @@ func (t *Table) Schema() sql.Schema {
 	defer t.mu.RUnlock()
 
 	rows, err := t.db.engine.Query(`
-		SELECT column_name, data_type, is_nullable, numeric_precision, numeric_scale FROM duckdb_columns() WHERE schema_name = ? AND table_name = ?
+		SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale FROM duckdb_columns() WHERE schema_name = ? AND table_name = ?
 	`, t.db.name, t.name)
 	if err != nil {
 		panic(ErrDuckDB.New(err))
@@ -61,15 +61,24 @@ func (t *Table) Schema() sql.Schema {
 	for rows.Next() {
 		var columnName, dataType string
 		var isNullable bool
+		var columnDefault stdsql.NullString
 		var numericPrecision, numericScale stdsql.NullInt32
-		if err := rows.Scan(&columnName, &dataType, &isNullable, &numericPrecision, &numericScale); err != nil {
+		if err := rows.Scan(&columnName, &dataType, &isNullable, &columnDefault, &numericPrecision, &numericScale); err != nil {
 			panic(ErrDuckDB.New(err))
 		}
 
+		defaultValue := (*sql.ColumnDefaultValue)(nil)
+		if columnDefault.Valid {
+			defaultValue = sql.NewUnresolvedColumnDefaultValue(columnDefault.String)
+		}
+
 		column := &sql.Column{
-			Name:     columnName,
-			Type:     mysqlDataType(dataType, uint8(numericPrecision.Int32), uint8(numericScale.Int32)),
-			Nullable: isNullable,
+			Name:           columnName,
+			Type:           mysqlDataType(dataType, uint8(numericPrecision.Int32), uint8(numericScale.Int32)),
+			Nullable:       isNullable,
+			Source:         t.name,
+			DatabaseSource: t.db.name,
+			Default:        defaultValue,
 		}
 
 		schema = append(schema, column)
@@ -97,7 +106,7 @@ func (t *Table) AddColumn(ctx *sql.Context, column *sql.Column, order *sql.Colum
 		return err
 	}
 
-	sql := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", t.name, column.Name, typ)
+	sql := fmt.Sprintf(`ALTER TABLE "%s"."%s" ADD COLUMN "%s" %s`, t.db.name, t.name, column.Name, typ)
 
 	if !column.Nullable {
 		sql += " NOT NULL"
@@ -120,7 +129,7 @@ func (t *Table) DropColumn(ctx *sql.Context, columnName string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	sql := fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s", t.name, columnName)
+	sql := fmt.Sprintf(`ALTER TABLE "%s"."%s" DROP COLUMN "%s"`, t.db.name, t.name, columnName)
 
 	_, err := t.db.engine.Exec(sql)
 	if err != nil {
@@ -135,7 +144,7 @@ func (t *Table) ModifyColumn(ctx *sql.Context, columnName string, column *sql.Co
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	sql := fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s", t.name, columnName)
+	sql := fmt.Sprintf(`ALTER TABLE "%s"."%s" ALTER COLUMN "%s"`, t.db.name, t.name, columnName)
 
 	typ, err := duckdbDataType(column.Type)
 	if err != nil {
@@ -161,18 +170,11 @@ func (t *Table) ModifyColumn(ctx *sql.Context, columnName string, column *sql.Co
 		return ErrDuckDB.New(err)
 	}
 
-	if columnName != column.Name {
-		renameSQL := fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s", t.name, columnName, column.Name)
-		_, err = t.db.engine.Exec(renameSQL)
-		if err != nil {
-			return ErrDuckDB.New(err)
-		}
-	}
-
 	return nil
 }
 
 // Updater implements sql.AlterableTable.
 func (t *Table) Updater(ctx *sql.Context) sql.RowUpdater {
-	panic(fmt.Sprintf("unimplemented (table: %s, query: %s)", t.name, ctx.Query()))
+	// Called when altering a table’s default value. No update needed as DuckDB handles it internally.
+	return nil
 }

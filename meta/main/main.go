@@ -36,7 +36,7 @@ func NewSessionBuilder(pro *meta.DbProvider) func(ctx context.Context, conn *mys
 }
 
 func main() {
-	provider := meta.NewDBProvider("")
+	provider := meta.NewDBProvider("mysql")
 	engine := sqle.NewDefault(provider)
 
 	session := sql.NewBaseSession()
