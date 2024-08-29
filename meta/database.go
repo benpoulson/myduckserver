@@ -21,6 +21,7 @@ var _ sql.TableDropper = (*Database)(nil)
 var _ sql.TableRenamer = (*Database)(nil)
 var _ sql.ViewDatabase = (*Database)(nil)
 var _ sql.TriggerDatabase = (*Database)(nil)
+var _ sql.CollatedDatabase = (*Database)(nil)
 
 func NewDatabase(name string, engine *stdsql.DB) *Database {
 	return &Database{
@@ -188,4 +189,14 @@ func (d *Database) DropTrigger(ctx *sql.Context, name string) error {
 // GetTriggers implements sql.TriggerDatabase.
 func (d *Database) GetTriggers(ctx *sql.Context) ([]sql.TriggerDefinition, error) {
 	return nil, nil
+}
+
+// GetCollation implements sql.CollatedDatabase.
+func (d *Database) GetCollation(ctx *sql.Context) sql.CollationID {
+	return sql.Collation_Default
+}
+
+// SetCollation implements sql.CollatedDatabase.
+func (d *Database) SetCollation(ctx *sql.Context, collation sql.CollationID) error {
+	return nil
 }
