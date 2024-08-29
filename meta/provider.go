@@ -20,6 +20,14 @@ type DbProvider struct {
 var _ sql.DatabaseProvider = (*DbProvider)(nil)
 var _ sql.MutableDatabaseProvider = (*DbProvider)(nil)
 
+func NewInMemoryDBProvider() *DbProvider {
+	prov, err := NewDBProvider("")
+	if err != nil {
+		panic(err)
+	}
+	return prov
+}
+
 func NewDBProvider(dbFile string) (*DbProvider, error) {
 	dbFile = strings.TrimSpace(dbFile)
 	name := ""

@@ -34,7 +34,9 @@ require (
 	github.com/dolthub/go-icu-regex v0.0.0-20230524105445-af7e7991c97e // indirect
 	github.com/dolthub/jsonpath v0.0.2-0.20240227200619-19675ab05c71 // indirect
 	github.com/go-kit/kit v0.10.0 // indirect
+	github.com/go-sql-driver/mysql v1.7.2-0.20231213112541-0004702b931d // indirect
 	github.com/goccy/go-json v0.10.3 // indirect
+	github.com/gocraft/dbr/v2 v2.7.2 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/geo v0.0.0-20200730024412-e86565bf3f35 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
