@@ -12,37 +12,41 @@ import (
 )
 
 type DbProvider struct {
-	mu     *sync.RWMutex
-	engine *stdsql.DB
-	name   string // also used as the database name in duckdb
+	mu      *sync.RWMutex
+	storage *stdsql.DB
+	name    string // also used as the database name in duckdb
 }
 
 var _ sql.DatabaseProvider = (*DbProvider)(nil)
 var _ sql.MutableDatabaseProvider = (*DbProvider)(nil)
 
-func NewDBProvider(name string) *DbProvider {
-	name = strings.TrimSpace(name)
-	if name == "memory" {
-		panic("'memory' is a reserved keyword and cannot be used as a database name")
-	}
-
-	dsn := ""
-	if name == "" {
+func NewDBProvider(dbFile string) (*DbProvider, error) {
+	dbFile = strings.TrimSpace(dbFile)
+	name := ""
+	if dbFile == "" {
 		// in-memory mode, mainly for testing
 		name = "memory"
 	} else {
-		dsn = name + ".db"
+		name = strings.Split(dbFile, ".")[0]
 	}
 
-	engine, err := stdsql.Open("duckdb", dsn)
+	storage, err := stdsql.Open("duckdb", dbFile)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	return &DbProvider{
-		mu:     &sync.RWMutex{},
-		engine: engine,
-		name:   name,
-	}
+		mu:      &sync.RWMutex{},
+		storage: storage,
+		name:    name,
+	}, nil
+}
+
+func (prov *DbProvider) Close() error {
+	return prov.storage.Close()
+}
+
+func (prov *DbProvider) Storage() *stdsql.DB {
+	return prov.storage
 }
 
 // AllDatabases implements sql.DatabaseProvider.
@@ -50,7 +54,7 @@ func (prov *DbProvider) AllDatabases(ctx *sql.Context) []sql.Database {
 	prov.mu.RLock()
 	defer prov.mu.RUnlock()
 
-	rows, err := prov.engine.Query("SELECT DISTINCT schema_name FROM information_schema.schemata WHERE catalog_name = ?", prov.name)
+	rows, err := prov.storage.Query("SELECT DISTINCT schema_name FROM information_schema.schemata WHERE catalog_name = ?", prov.name)
 	if err != nil {
 		panic(ErrDuckDB.New(err))
 	}
@@ -68,7 +72,7 @@ func (prov *DbProvider) AllDatabases(ctx *sql.Context) []sql.Database {
 			continue
 		}
 
-		all = append(all, NewDatabase(schemaName, prov.engine))
+		all = append(all, NewDatabase(schemaName, prov.storage))
 	}
 
 	sort.Slice(all, func(i, j int) bool {
@@ -83,13 +87,13 @@ func (prov *DbProvider) Database(ctx *sql.Context, name string) (sql.Database, e
 	prov.mu.RLock()
 	defer prov.mu.RUnlock()
 
-	ok, err := hasDatabase(prov.engine, prov.name, name)
+	ok, err := hasDatabase(prov.storage, prov.name, name)
 	if err != nil {
 		return nil, err
 	}
 
 	if ok {
-		return NewDatabase(name, prov.engine), nil
+		return NewDatabase(name, prov.storage), nil
 	}
 	return nil, sql.ErrDatabaseNotFound.New(name)
 }
@@ -99,7 +103,7 @@ func (prov *DbProvider) HasDatabase(ctx *sql.Context, name string) bool {
 	prov.mu.RLock()
 	defer prov.mu.RUnlock()
 
-	ok, err := hasDatabase(prov.engine, prov.name, name)
+	ok, err := hasDatabase(prov.storage, prov.name, name)
 	if err != nil {
 		panic(err)
 	}
@@ -121,7 +125,7 @@ func (prov *DbProvider) CreateDatabase(ctx *sql.Context, name string) error {
 	prov.mu.Lock()
 	defer prov.mu.Unlock()
 
-	_, err := prov.engine.Exec(`CREATE SCHEMA "` + name + `"`)
+	_, err := prov.storage.Exec(`CREATE SCHEMA "` + name + `"`)
 	if err != nil {
 		return ErrDuckDB.New(err)
 	}
@@ -134,7 +138,7 @@ func (prov *DbProvider) DropDatabase(ctx *sql.Context, name string) error {
 	prov.mu.Lock()
 	defer prov.mu.Unlock()
 
-	_, err := prov.engine.Exec(`DROP SCHEMA "` + name + `" CASCADE`)
+	_, err := prov.storage.Exec(`DROP SCHEMA "` + name + `" CASCADE`)
 	if err != nil {
 		return ErrDuckDB.New(err)
 	}
