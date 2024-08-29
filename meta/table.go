@@ -16,6 +16,9 @@ type Table struct {
 
 var _ sql.Table = (*Table)(nil)
 var _ sql.AlterableTable = (*Table)(nil)
+var _ sql.InsertableTable = (*Table)(nil)
+var _ sql.UpdatableTable = (*Table)(nil)
+var _ sql.DeletableTable = (*Table)(nil)
 
 func NewTable(name string, db *Database) *Table {
 	return &Table{
@@ -177,4 +180,14 @@ func (t *Table) ModifyColumn(ctx *sql.Context, columnName string, column *sql.Co
 func (t *Table) Updater(ctx *sql.Context) sql.RowUpdater {
 	// Called when altering a table’s default value. No update needed as DuckDB handles it internally.
 	return nil
+}
+
+// Inserter implements sql.InsertableTable.
+func (t *Table) Inserter(*sql.Context) sql.RowInserter {
+	panic("unimplemented")
+}
+
+// Deleter implements sql.DeletableTable.
+func (t *Table) Deleter(*sql.Context) sql.RowDeleter {
+	panic("unimplemented")
 }

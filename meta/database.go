@@ -19,6 +19,8 @@ var _ sql.Database = (*Database)(nil)
 var _ sql.TableCreator = (*Database)(nil)
 var _ sql.TableDropper = (*Database)(nil)
 var _ sql.TableRenamer = (*Database)(nil)
+var _ sql.ViewDatabase = (*Database)(nil)
+var _ sql.TriggerDatabase = (*Database)(nil)
 
 func NewDatabase(name string, engine *stdsql.DB) *Database {
 	return &Database{
@@ -151,4 +153,39 @@ func (d *Database) RenameTable(ctx *sql.Context, oldName string, newName string)
 		return ErrDuckDB.New(err)
 	}
 	return nil
+}
+
+// AllViews implements sql.ViewDatabase.
+func (d *Database) AllViews(ctx *sql.Context) ([]sql.ViewDefinition, error) {
+	return nil, nil
+}
+
+// CreateView implements sql.ViewDatabase.
+func (d *Database) CreateView(ctx *sql.Context, name string, selectStatement string, createViewStmt string) error {
+	return sql.ErrViewsNotSupported.New(d.name)
+}
+
+// DropView implements sql.ViewDatabase.
+func (d *Database) DropView(ctx *sql.Context, name string) error {
+	return sql.ErrViewsNotSupported.New(d.name)
+}
+
+// GetViewDefinition implements sql.ViewDatabase.
+func (d *Database) GetViewDefinition(ctx *sql.Context, viewName string) (sql.ViewDefinition, bool, error) {
+	return sql.ViewDefinition{}, false, nil
+}
+
+// CreateTrigger implements sql.TriggerDatabase.
+func (d *Database) CreateTrigger(ctx *sql.Context, definition sql.TriggerDefinition) error {
+	return sql.ErrTriggersNotSupported.New(d.name)
+}
+
+// DropTrigger implements sql.TriggerDatabase.
+func (d *Database) DropTrigger(ctx *sql.Context, name string) error {
+	return sql.ErrTriggersNotSupported.New(d.name)
+}
+
+// GetTriggers implements sql.TriggerDatabase.
+func (d *Database) GetTriggers(ctx *sql.Context) ([]sql.TriggerDefinition, error) {
+	return nil, nil
 }
