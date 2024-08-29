@@ -156,24 +156,90 @@ func (d *Database) RenameTable(ctx *sql.Context, oldName string, newName string)
 	return nil
 }
 
+// extractViewDefinitions is a helper function to extract view definitions from DuckDB
+func (d *Database) extractViewDefinitions(schemaName string, viewName string) ([]sql.ViewDefinition, error) {
+	query := `
+		SELECT view_name, sql
+		FROM duckdb_views()
+		WHERE schema_name = ?
+	`
+	args := []interface{}{schemaName}
+
+	if viewName != "" {
+		query += " AND view_name = ?"
+		args = append(args, viewName)
+	}
+
+	rows, err := d.engine.Query(query, args...)
+	if err != nil {
+		return nil, ErrDuckDB.New(err)
+	}
+	defer rows.Close()
+
+	var views []sql.ViewDefinition
+	for rows.Next() {
+		var name, createViewStmt string
+		if err := rows.Scan(&name, &createViewStmt); err != nil {
+			return nil, ErrDuckDB.New(err)
+		}
+		views = append(views, sql.ViewDefinition{
+			Name:                name,
+			CreateViewStatement: createViewStmt,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, ErrDuckDB.New(err)
+	}
+	return views, nil
+}
+
 // AllViews implements sql.ViewDatabase.
 func (d *Database) AllViews(ctx *sql.Context) ([]sql.ViewDefinition, error) {
-	return nil, nil
-}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 
-// CreateView implements sql.ViewDatabase.
-func (d *Database) CreateView(ctx *sql.Context, name string, selectStatement string, createViewStmt string) error {
-	return sql.ErrViewsNotSupported.New(d.name)
-}
-
-// DropView implements sql.ViewDatabase.
-func (d *Database) DropView(ctx *sql.Context, name string) error {
-	return sql.ErrViewsNotSupported.New(d.name)
+	return d.extractViewDefinitions(d.name, "")
 }
 
 // GetViewDefinition implements sql.ViewDatabase.
 func (d *Database) GetViewDefinition(ctx *sql.Context, viewName string) (sql.ViewDefinition, bool, error) {
-	return sql.ViewDefinition{}, false, nil
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	views, err := d.extractViewDefinitions(d.name, viewName)
+	if err != nil {
+		return sql.ViewDefinition{}, false, err
+	}
+
+	if len(views) == 0 {
+		return sql.ViewDefinition{}, false, nil
+	}
+
+	return views[0], true, nil
+}
+
+// CreateView implements sql.ViewDatabase.
+func (d *Database) CreateView(ctx *sql.Context, name string, selectStatement string, createViewStmt string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.engine.Exec(fmt.Sprintf(`USE "%s"; CREATE VIEW "%s" AS %s`, d.name, name, selectStatement))
+	if err != nil {
+		return ErrDuckDB.New(err)
+	}
+	return nil
+}
+
+// DropView implements sql.ViewDatabase.
+func (d *Database) DropView(ctx *sql.Context, name string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.engine.Exec(fmt.Sprintf(`USE "%s"; DROP VIEW "%s"`, d.name, name))
+	if err != nil {
+		return ErrDuckDB.New(err)
+	}
+	return nil
 }
 
 // CreateTrigger implements sql.TriggerDatabase.
