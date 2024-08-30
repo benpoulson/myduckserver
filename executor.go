@@ -44,15 +44,19 @@ func NewDuckBuilder(base sql.NodeExecBuilder, db *stdsql.DB, catalogName string)
 
 func (b *DuckBuilder) GetConn(ctx context.Context, id uint32, schemaName string) (*stdsql.Conn, error) {
 	entry, ok := b.conns.Load(id)
+	conn := (*stdsql.Conn)(nil)
+
 	if !ok {
 		c, err := b.db.Conn(ctx)
 		if err != nil {
 			return nil, err
 		}
 		b.conns.Store(id, c)
-		return c, nil
+		conn = c
+	} else {
+		conn = entry.(*stdsql.Conn)
 	}
-	conn := entry.(*stdsql.Conn)
+
 	if schemaName != "" {
 		var currentSchema string
 		if err := conn.QueryRowContext(ctx, "SELECT CURRENT_SCHEMA()").Scan(&currentSchema); err != nil {
