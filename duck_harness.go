@@ -183,7 +183,7 @@ func (m *DuckHarness) NewEngine(t *testing.T) (enginetest.QueryEngine, error) {
 		m.session = nil
 		m.provider = nil
 	}
-	engine, err := enginetest.NewEngine(t, m, m.getProvider(), m.setupData, memory.NewStatsProv())
+	engine, err := NewEngine(t, m, m.getProvider(), m.setupData, memory.NewStatsProv())
 	if err != nil {
 		return nil, err
 	}
@@ -193,6 +193,33 @@ func (m *DuckHarness) NewEngine(t *testing.T) (enginetest.QueryEngine, error) {
 	}
 
 	return engine, nil
+}
+
+// NewEngine creates an engine and sets it up for testing using harness, provider, and setup data given.
+func NewEngine(t *testing.T, harness enginetest.Harness, dbProvider sql.DatabaseProvider, setupData []setup.SetupScript, statsProvider sql.StatsProvider) (*sqle.Engine, error) {
+	e := enginetest.NewEngineWithProvider(t, harness, dbProvider)
+	e.Analyzer.Catalog.StatsProvider = statsProvider
+
+	provider := dbProvider.(*meta.DbProvider)
+	builder := &DuckBuilder{
+		provider: provider,
+		base:     e.Analyzer.ExecBuilder,
+		db:       provider.Storage(),
+	}
+	e.Analyzer.ExecBuilder = builder
+
+	ctx := enginetest.NewContext(harness)
+
+	var supportsIndexes bool
+	if ih, ok := harness.(enginetest.IndexHarness); ok && ih.SupportsNativeIndexCreation() {
+		supportsIndexes = true
+	}
+
+	// TODO: remove ths, make it explicit everywhere
+	if len(setupData) == 0 {
+		setupData = setup.MydbData
+	}
+	return enginetest.RunSetupScripts(ctx, e, setupData, supportsIndexes)
 }
 
 func (m *DuckHarness) SupportsNativeIndexCreation() bool {
