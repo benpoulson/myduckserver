@@ -58,7 +58,8 @@ type DuckHarness struct {
 }
 
 var _ enginetest.Harness = (*DuckHarness)(nil)
-var _ enginetest.IndexDriverHarness = (*DuckHarness)(nil)
+
+// var _ enginetest.IndexDriverHarness = (*DuckHarness)(nil)
 var _ enginetest.IndexHarness = (*DuckHarness)(nil)
 var _ enginetest.ForeignKeyHarness = (*DuckHarness)(nil)
 var _ enginetest.KeylessTableHarness = (*DuckHarness)(nil)
@@ -125,11 +126,11 @@ func (m *DuckHarness) ExternalStoredProcedures(_ *sql.Context, name string) ([]s
 	return m.externalProcedureRegistry.LookupByName(name)
 }
 
-func (m *DuckHarness) InitializeIndexDriver(dbs []sql.Database) {
-	if m.indexDriverInitializer != nil {
-		m.driver = m.indexDriverInitializer(dbs)
-	}
-}
+// func (m *DuckHarness) InitializeIndexDriver(dbs []sql.Database) {
+// 	if m.indexDriverInitializer != nil {
+// 		m.driver = m.indexDriverInitializer(dbs)
+// 	}
+// }
 
 func (m *DuckHarness) NewSession() *sql.Context {
 	m.session = m.newSession()
@@ -247,7 +248,7 @@ func (m *DuckHarness) SupportsNativeIndexCreation() bool {
 }
 
 func (m *DuckHarness) SupportsForeignKeys() bool {
-	return true
+	return false
 }
 
 func (m *DuckHarness) SupportsKeylessTables() bool {
