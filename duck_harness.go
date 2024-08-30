@@ -14,7 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package meta
+package main
 
 import (
 	"context"
@@ -24,6 +24,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/apecloud/myduckserver/meta"
 	"github.com/dolthub/vitess/go/mysql"
 
 	sqle "github.com/dolthub/go-mysql-server"
@@ -38,7 +39,7 @@ const testNumPartitions = 5
 
 type IndexDriverInitializer func([]sql.Database) sql.IndexDriver
 
-type MetaHarness struct {
+type DuckHarness struct {
 	name               string
 	parallelism        int
 	numTablePartitions int
@@ -56,16 +57,16 @@ type MetaHarness struct {
 	mu                        *sync.Mutex
 }
 
-var _ enginetest.Harness = (*MetaHarness)(nil)
-var _ enginetest.IndexDriverHarness = (*MetaHarness)(nil)
-var _ enginetest.IndexHarness = (*MetaHarness)(nil)
-var _ enginetest.ForeignKeyHarness = (*MetaHarness)(nil)
-var _ enginetest.KeylessTableHarness = (*MetaHarness)(nil)
-var _ enginetest.ClientHarness = (*MetaHarness)(nil)
-var _ enginetest.ServerHarness = (*MetaHarness)(nil)
-var _ sql.ExternalStoredProcedureProvider = (*MetaHarness)(nil)
+var _ enginetest.Harness = (*DuckHarness)(nil)
+var _ enginetest.IndexDriverHarness = (*DuckHarness)(nil)
+var _ enginetest.IndexHarness = (*DuckHarness)(nil)
+var _ enginetest.ForeignKeyHarness = (*DuckHarness)(nil)
+var _ enginetest.KeylessTableHarness = (*DuckHarness)(nil)
+var _ enginetest.ClientHarness = (*DuckHarness)(nil)
+var _ enginetest.ServerHarness = (*DuckHarness)(nil)
+var _ sql.ExternalStoredProcedureProvider = (*DuckHarness)(nil)
 
-func NewMetaHarness(name string, parallelism int, numTablePartitions int, useNativeIndexes bool, driverInitializer IndexDriverInitializer) *MetaHarness {
+func NewDuckHarness(name string, parallelism int, numTablePartitions int, useNativeIndexes bool, driverInitializer IndexDriverInitializer) *DuckHarness {
 	externalProcedureRegistry := sql.NewExternalStoredProcedureRegistry()
 	for _, esp := range memory.ExternalStoredProcedures {
 		externalProcedureRegistry.Register(esp)
@@ -76,7 +77,7 @@ func NewMetaHarness(name string, parallelism int, numTablePartitions int, useNat
 		useServer = true
 	}
 
-	return &MetaHarness{
+	return &DuckHarness{
 		name:                      name,
 		numTablePartitions:        numTablePartitions,
 		indexDriverInitializer:    driverInitializer,
@@ -89,17 +90,17 @@ func NewMetaHarness(name string, parallelism int, numTablePartitions int, useNat
 	}
 }
 
-func NewDefaultMetaHarness() *MetaHarness {
-	return NewMetaHarness("default", 1, testNumPartitions, true, nil)
+func NewDefaultDuckHarness() *DuckHarness {
+	return NewDuckHarness("default", 1, testNumPartitions, true, nil)
 }
 
-// func NewReadOnlyMetaHarness() *MetaHarness {
-// 	h := NewDefaultMetaHarness()
+// func NewReadOnlyDuckHarness() *DuckHarness {
+// 	h := NewDefaultDuckHarness()
 // 	h.readonly = true
 // 	return h
 // }
 
-func (m *MetaHarness) SessionBuilder() server.SessionBuilder {
+func (m *DuckHarness) SessionBuilder() server.SessionBuilder {
 	return func(ctx context.Context, c *mysql.Conn, addr string) (sql.Session, error) {
 		host := ""
 		user := ""
@@ -115,69 +116,69 @@ func (m *MetaHarness) SessionBuilder() server.SessionBuilder {
 }
 
 // ExternalStoredProcedure implements the sql.ExternalStoredProcedureProvider interface
-func (m *MetaHarness) ExternalStoredProcedure(_ *sql.Context, name string, numOfParams int) (*sql.ExternalStoredProcedureDetails, error) {
+func (m *DuckHarness) ExternalStoredProcedure(_ *sql.Context, name string, numOfParams int) (*sql.ExternalStoredProcedureDetails, error) {
 	return m.externalProcedureRegistry.LookupByNameAndParamCount(name, numOfParams)
 }
 
 // ExternalStoredProcedures implements the sql.ExternalStoredProcedureProvider interface
-func (m *MetaHarness) ExternalStoredProcedures(_ *sql.Context, name string) ([]sql.ExternalStoredProcedureDetails, error) {
+func (m *DuckHarness) ExternalStoredProcedures(_ *sql.Context, name string) ([]sql.ExternalStoredProcedureDetails, error) {
 	return m.externalProcedureRegistry.LookupByName(name)
 }
 
-func (m *MetaHarness) InitializeIndexDriver(dbs []sql.Database) {
+func (m *DuckHarness) InitializeIndexDriver(dbs []sql.Database) {
 	if m.indexDriverInitializer != nil {
 		m.driver = m.indexDriverInitializer(dbs)
 	}
 }
 
-func (m *MetaHarness) NewSession() *sql.Context {
+func (m *DuckHarness) NewSession() *sql.Context {
 	m.session = m.newSession()
 	return m.NewContext()
 }
 
-func (m *MetaHarness) SkipQueryTest(query string) bool {
+func (m *DuckHarness) SkipQueryTest(query string) bool {
 	_, ok := m.skippedQueries[strings.ToLower(query)]
 	return ok
 }
 
-func (m *MetaHarness) QueriesToSkip(queries ...string) {
+func (m *DuckHarness) QueriesToSkip(queries ...string) {
 	for _, query := range queries {
 		m.skippedQueries[strings.ToLower(query)] = struct{}{}
 	}
 }
 
-func (m *MetaHarness) UseServer() {
+func (m *DuckHarness) UseServer() {
 	m.server = true
 }
 
-func (m *MetaHarness) IsUsingServer() bool {
+func (m *DuckHarness) IsUsingServer() bool {
 	return m.server
 }
 
-type SkippingMetaHarness struct {
-	MetaHarness
+type SkippingDuckHarness struct {
+	DuckHarness
 }
 
-var _ enginetest.SkippingHarness = (*SkippingMetaHarness)(nil)
+var _ enginetest.SkippingHarness = (*SkippingDuckHarness)(nil)
 
-func NewSkippingMetaHarness() *SkippingMetaHarness {
-	return &SkippingMetaHarness{
-		MetaHarness: *NewDefaultMetaHarness(),
+func NewSkippingDuckHarness() *SkippingDuckHarness {
+	return &SkippingDuckHarness{
+		DuckHarness: *NewDefaultDuckHarness(),
 	}
 }
 
-func (s SkippingMetaHarness) SkipQueryTest(query string) bool {
+func (s SkippingDuckHarness) SkipQueryTest(query string) bool {
 	return true
 }
 
-func (m *MetaHarness) Setup(setupData ...[]setup.SetupScript) {
+func (m *DuckHarness) Setup(setupData ...[]setup.SetupScript) {
 	m.setupData = nil
 	for i := range setupData {
 		m.setupData = append(m.setupData, setupData[i]...)
 	}
 }
 
-func (m *MetaHarness) NewEngine(t *testing.T) (enginetest.QueryEngine, error) {
+func (m *DuckHarness) NewEngine(t *testing.T) (enginetest.QueryEngine, error) {
 	if !m.retainSession {
 		m.session = nil
 		m.provider = nil
@@ -194,23 +195,23 @@ func (m *MetaHarness) NewEngine(t *testing.T) (enginetest.QueryEngine, error) {
 	return engine, nil
 }
 
-func (m *MetaHarness) SupportsNativeIndexCreation() bool {
+func (m *DuckHarness) SupportsNativeIndexCreation() bool {
 	return m.nativeIndexSupport
 }
 
-func (m *MetaHarness) SupportsForeignKeys() bool {
+func (m *DuckHarness) SupportsForeignKeys() bool {
 	return true
 }
 
-func (m *MetaHarness) SupportsKeylessTables() bool {
+func (m *DuckHarness) SupportsKeylessTables() bool {
 	return true
 }
 
-func (m *MetaHarness) Parallelism() int {
+func (m *DuckHarness) Parallelism() int {
 	return m.parallelism
 }
 
-func (m *MetaHarness) NewContext() *sql.Context {
+func (m *DuckHarness) NewContext() *sql.Context {
 	if m.session == nil {
 		m.session = m.newSession()
 	}
@@ -221,7 +222,7 @@ func (m *MetaHarness) NewContext() *sql.Context {
 	)
 }
 
-func (m *MetaHarness) newSession() *memory.Session {
+func (m *DuckHarness) newSession() *memory.Session {
 	baseSession := enginetest.NewBaseSession()
 	session := memory.NewSession(baseSession, m.getProvider())
 	if m.driver != nil {
@@ -230,7 +231,7 @@ func (m *MetaHarness) newSession() *memory.Session {
 	return session
 }
 
-func (m *MetaHarness) NewContextWithClient(client sql.Client) *sql.Context {
+func (m *DuckHarness) NewContextWithClient(client sql.Client) *sql.Context {
 	baseSession := sql.NewBaseSessionWithClientServer("address", client, 1)
 
 	return sql.NewContext(
@@ -239,39 +240,39 @@ func (m *MetaHarness) NewContextWithClient(client sql.Client) *sql.Context {
 	)
 }
 
-func (m *MetaHarness) IndexDriver(dbs []sql.Database) sql.IndexDriver {
+func (m *DuckHarness) IndexDriver(dbs []sql.Database) sql.IndexDriver {
 	if m.indexDriverInitializer != nil {
 		return m.indexDriverInitializer(dbs)
 	}
 	return nil
 }
 
-func (m *MetaHarness) WithProvider(provider sql.DatabaseProvider) *MetaHarness {
+func (m *DuckHarness) WithProvider(provider sql.DatabaseProvider) *DuckHarness {
 	ret := *m
 	ret.provider = provider
 	return &ret
 }
 
-func (m *MetaHarness) getProvider() sql.DatabaseProvider {
+func (m *DuckHarness) getProvider() sql.DatabaseProvider {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.provider == nil {
-		m.provider = m.NewDatabaseProvider().(*DbProvider)
+		m.provider = m.NewDatabaseProvider().(*meta.DbProvider)
 	}
 
 	return m.provider
 }
 
-func (m *MetaHarness) NewDatabaseProvider() sql.MutableDatabaseProvider {
-	return NewInMemoryDBProvider()
+func (m *DuckHarness) NewDatabaseProvider() sql.MutableDatabaseProvider {
+	return meta.NewInMemoryDBProvider()
 }
 
-func (m *MetaHarness) Provider() *DbProvider {
-	return m.getProvider().(*DbProvider)
+func (m *DuckHarness) Provider() *meta.DbProvider {
+	return m.getProvider().(*meta.DbProvider)
 }
 
-func (m *MetaHarness) ValidateEngine(ctx *sql.Context, e *sqle.Engine) error {
+func (m *DuckHarness) ValidateEngine(ctx *sql.Context, e *sqle.Engine) error {
 	return sanityCheckEngine(ctx, e)
 }
 

@@ -14,7 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package meta_test
+package main
 
 import (
 	"fmt"
@@ -22,7 +22,6 @@ import (
 	"os"
 	"testing"
 
-	"github.com/apecloud/myduckserver/meta"
 	"github.com/stretchr/testify/require"
 
 	"github.com/dolthub/go-mysql-server/enginetest"
@@ -35,18 +34,11 @@ import (
 	_ "github.com/dolthub/go-mysql-server/sql/variables"
 )
 
-// This file is for validating both the engine itself and the in-memory database implementation in the memory package.
-// Any engine test that relies on the correct implementation of the in-memory database belongs here. All test logic and
-// queries are declared in the exported enginetest package to make them usable by integrators, to validate the engine
-// against their own implementation.
-
 type indexBehaviorTestParams struct {
 	name              string
-	driverInitializer meta.IndexDriverInitializer
+	driverInitializer IndexDriverInitializer
 	nativeIndexes     bool
 }
-
-const testNumPartitions = 5
 
 var numPartitionsVals = []int{
 	1,
@@ -76,7 +68,7 @@ func TestQueries(t *testing.T) {
 					continue
 				}
 				testName := fmt.Sprintf("partitions=%d,indexes=%v,parallelism=%v", numPartitions, indexBehavior.name, parallelism)
-				harness := meta.NewMetaHarness(testName, parallelism, numPartitions, indexBehavior.nativeIndexes, indexBehavior.driverInitializer)
+				harness := NewDuckHarness(testName, parallelism, numPartitions, indexBehavior.nativeIndexes, indexBehavior.driverInitializer)
 
 				t.Run(testName, func(t *testing.T) {
 					enginetest.TestQueries(t, harness)
@@ -88,7 +80,7 @@ func TestQueries(t *testing.T) {
 
 // TestQueriesPreparedSimple runs the canonical test queries against a single threaded index enabled harness.
 func TestQueriesPreparedSimple(t *testing.T) {
-	harness := meta.NewDefaultMetaHarness()
+	harness := NewDefaultDuckHarness()
 	if harness.IsUsingServer() {
 		t.Skip("issue: https://github.com/dolthub/dolt/issues/6904 and https://github.com/dolthub/dolt/issues/6901")
 	}
@@ -97,31 +89,31 @@ func TestQueriesPreparedSimple(t *testing.T) {
 
 // TestQueriesSimple runs the canonical test queries against a single threaded index enabled harness.
 func TestQueriesSimple(t *testing.T) {
-	harness := meta.NewDefaultMetaHarness()
+	harness := NewDefaultDuckHarness()
 	enginetest.TestQueries(t, harness)
 }
 
 // TestJoinQueries runs the canonical test queries against a single threaded index enabled harness.
 func TestJoinQueries(t *testing.T) {
-	enginetest.TestJoinQueries(t, meta.NewDefaultMetaHarness())
+	enginetest.TestJoinQueries(t, NewDefaultDuckHarness())
 }
 
 func TestLateralJoin(t *testing.T) {
-	enginetest.TestLateralJoinQueries(t, meta.NewDefaultMetaHarness())
+	enginetest.TestLateralJoinQueries(t, NewDefaultDuckHarness())
 }
 
 // TestJoinPlanning runs join-specific tests for merge
 func TestJoinPlanning(t *testing.T) {
-	enginetest.TestJoinPlanning(t, meta.NewDefaultMetaHarness())
+	enginetest.TestJoinPlanning(t, NewDefaultDuckHarness())
 }
 
 // TestJoinOps runs join-specific tests for merge
 func TestJoinOps(t *testing.T) {
-	enginetest.TestJoinOps(t, meta.NewDefaultMetaHarness(), enginetest.DefaultJoinOpTests)
+	enginetest.TestJoinOps(t, NewDefaultDuckHarness(), enginetest.DefaultJoinOpTests)
 }
 
 func TestJoinStats(t *testing.T) {
-	harness := meta.NewDefaultMetaHarness()
+	harness := NewDefaultDuckHarness()
 	if harness.IsUsingServer() {
 		t.Skip("join stats don't work with bindvars")
 	}
@@ -130,12 +122,12 @@ func TestJoinStats(t *testing.T) {
 
 // TestJSONTableQueries runs the canonical test queries against a single threaded index enabled harness.
 func TestJSONTableQueries(t *testing.T) {
-	enginetest.TestJSONTableQueries(t, meta.NewDefaultMetaHarness())
+	enginetest.TestJSONTableQueries(t, NewDefaultDuckHarness())
 }
 
 // TestJSONTableScripts runs the canonical test queries against a single threaded index enabled harness.
 func TestJSONTableScripts(t *testing.T) {
-	enginetest.TestJSONTableScripts(t, meta.NewDefaultMetaHarness())
+	enginetest.TestJSONTableScripts(t, NewDefaultDuckHarness())
 }
 
 // TestBrokenJSONTableScripts runs the canonical test queries against a single threaded index enabled harness.
@@ -152,7 +144,7 @@ func TestSingleQuery(t *testing.T) {
 	}
 
 	// fmt.Sprintf("%v", test)
-	harness := meta.NewMetaHarness("", 1, testNumPartitions, true, nil)
+	harness := NewDuckHarness("", 1, testNumPartitions, true, nil)
 	// harness.UseServer()
 	harness.Setup(setup.MydbData, setup.NiltableData)
 	engine, err := harness.NewEngine(t)
@@ -183,7 +175,7 @@ func TestSingleQueryPrepared(t *testing.T) {
 	}
 
 	// fmt.Sprintf("%v", test)
-	harness := meta.NewMetaHarness("", 1, testNumPartitions, false, nil)
+	harness := NewDuckHarness("", 1, testNumPartitions, false, nil)
 	harness.Setup(setup.KeylessSetup...)
 	engine, err := harness.NewEngine(t)
 	if err != nil {
@@ -208,7 +200,7 @@ func TestSingleScript(t *testing.T) {
 	}
 
 	for _, test := range scripts {
-		harness := meta.NewMetaHarness("", 1, testNumPartitions, true, nil)
+		harness := NewDuckHarness("", 1, testNumPartitions, true, nil)
 		engine, err := harness.NewEngine(t)
 		if err != nil {
 			panic(err)
@@ -242,7 +234,7 @@ func TestUnbuildableIndex(t *testing.T) {
 	}
 
 	for _, test := range scripts {
-		harness := meta.NewDefaultMetaHarness()
+		harness := NewDefaultDuckHarness()
 		enginetest.TestScript(t, harness, test)
 	}
 }
@@ -270,7 +262,7 @@ func TestQueryPlanTODOs(t *testing.T) {
 // 		for _, indexInit := range indexBehaviors {
 // 			for _, parallelism := range parallelVals {
 // 				testName := fmt.Sprintf("partitions=%d,indexes=%v,parallelism=%v", numPartitions, indexInit.name, parallelism)
-// 				harness := meta.NewMetaHarness(testName, parallelism, numPartitions, indexInit.nativeIndexes, indexInit.driverInitializer)
+// 				harness := NewMetaHarness(testName, parallelism, numPartitions, indexInit.nativeIndexes, indexInit.driverInitializer)
 
 // 				t.Run(testName, func(t *testing.T) {
 // 					enginetest.TestVersionedQueries(t, harness)
@@ -281,15 +273,15 @@ func TestQueryPlanTODOs(t *testing.T) {
 // }
 
 func TestAnsiQuotesSqlMode(t *testing.T) {
-	enginetest.TestAnsiQuotesSqlMode(t, meta.NewDefaultMetaHarness())
+	enginetest.TestAnsiQuotesSqlMode(t, NewDefaultDuckHarness())
 }
 
 func TestAnsiQuotesSqlModePrepared(t *testing.T) {
-	harness := meta.NewDefaultMetaHarness()
+	harness := NewDefaultDuckHarness()
 	if harness.IsUsingServer() {
 		t.Skip("prepared test depend on context for current sql_mode information, but it does not get updated when using ServerEngine")
 	}
-	enginetest.TestAnsiQuotesSqlModePrepared(t, meta.NewDefaultMetaHarness())
+	enginetest.TestAnsiQuotesSqlModePrepared(t, NewDefaultDuckHarness())
 }
 
 // Tests of choosing the correct execution plan independent of result correctness. Mostly useful for confirming that
@@ -302,7 +294,7 @@ func TestQueryPlans(t *testing.T) {
 
 	for _, indexInit := range indexBehaviors {
 		t.Run(indexInit.name, func(t *testing.T) {
-			harness := meta.NewMetaHarness(indexInit.name, 1, 2, indexInit.nativeIndexes, indexInit.driverInitializer)
+			harness := NewDuckHarness(indexInit.name, 1, 2, indexInit.nativeIndexes, indexInit.driverInitializer)
 			enginetest.TestQueryPlans(t, harness, queries.PlanTests)
 		})
 	}
@@ -389,7 +381,7 @@ func TestSingleQueryPlan(t *testing.T) {
 		},
 	}
 
-	harness := meta.NewMetaHarness("nativeIndexes", 1, 2, true, nil)
+	harness := NewDuckHarness("nativeIndexes", 1, 2, true, nil)
 	harness.Setup(setup.PlanSetup...)
 
 	for _, test := range tt {
@@ -411,7 +403,7 @@ func TestIntegrationQueryPlans(t *testing.T) {
 
 	for _, indexInit := range indexBehaviors {
 		t.Run(indexInit.name, func(t *testing.T) {
-			harness := meta.NewMetaHarness(indexInit.name, 1, 1, indexInit.nativeIndexes, indexInit.driverInitializer)
+			harness := NewDuckHarness(indexInit.name, 1, 1, indexInit.nativeIndexes, indexInit.driverInitializer)
 			enginetest.TestIntegrationPlans(t, harness)
 		})
 	}
@@ -425,7 +417,7 @@ func TestImdbQueryPlans(t *testing.T) {
 
 	for _, indexInit := range indexBehaviors {
 		t.Run(indexInit.name, func(t *testing.T) {
-			harness := meta.NewMetaHarness(indexInit.name, 1, 1, indexInit.nativeIndexes, indexInit.driverInitializer)
+			harness := NewDuckHarness(indexInit.name, 1, 1, indexInit.nativeIndexes, indexInit.driverInitializer)
 			enginetest.TestImdbPlans(t, harness)
 		})
 	}
@@ -438,7 +430,7 @@ func TestTpccQueryPlans(t *testing.T) {
 
 	for _, indexInit := range indexBehaviors {
 		t.Run(indexInit.name, func(t *testing.T) {
-			harness := meta.NewMetaHarness(indexInit.name, 1, 1, indexInit.nativeIndexes, indexInit.driverInitializer)
+			harness := NewDuckHarness(indexInit.name, 1, 1, indexInit.nativeIndexes, indexInit.driverInitializer)
 			enginetest.TestTpccPlans(t, harness)
 		})
 	}
@@ -451,7 +443,7 @@ func TestTpchQueryPlans(t *testing.T) {
 
 	for _, indexInit := range indexBehaviors {
 		t.Run(indexInit.name, func(t *testing.T) {
-			harness := meta.NewMetaHarness(indexInit.name, 1, 1, indexInit.nativeIndexes, indexInit.driverInitializer)
+			harness := NewDuckHarness(indexInit.name, 1, 1, indexInit.nativeIndexes, indexInit.driverInitializer)
 			enginetest.TestTpchPlans(t, harness)
 		})
 	}
@@ -465,7 +457,7 @@ func TestTpcdsQueryPlans(t *testing.T) {
 
 	for _, indexInit := range indexBehaviors {
 		t.Run(indexInit.name, func(t *testing.T) {
-			harness := meta.NewMetaHarness(indexInit.name, 1, 1, indexInit.nativeIndexes, indexInit.driverInitializer)
+			harness := NewDuckHarness(indexInit.name, 1, 1, indexInit.nativeIndexes, indexInit.driverInitializer)
 			enginetest.TestTpcdsPlans(t, harness)
 		})
 	}
@@ -479,190 +471,190 @@ func TestIndexQueryPlans(t *testing.T) {
 
 	for _, indexInit := range indexBehaviors {
 		t.Run(indexInit.name, func(t *testing.T) {
-			harness := meta.NewMetaHarness(indexInit.name, 1, 2, indexInit.nativeIndexes, indexInit.driverInitializer)
+			harness := NewDuckHarness(indexInit.name, 1, 2, indexInit.nativeIndexes, indexInit.driverInitializer)
 			enginetest.TestIndexQueryPlans(t, harness)
 		})
 	}
 }
 
 func TestParallelismQueries(t *testing.T) {
-	enginetest.TestParallelismQueries(t, meta.NewMetaHarness("default", 2, testNumPartitions, true, nil))
+	enginetest.TestParallelismQueries(t, NewDuckHarness("default", 2, testNumPartitions, true, nil))
 }
 
 func TestQueryErrors(t *testing.T) {
-	enginetest.TestQueryErrors(t, meta.NewDefaultMetaHarness())
+	enginetest.TestQueryErrors(t, NewDefaultDuckHarness())
 }
 
 func TestInfoSchema(t *testing.T) {
-	enginetest.TestInfoSchema(t, meta.NewMetaHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
+	enginetest.TestInfoSchema(t, NewDuckHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
 }
 
 func TestMySqlDb(t *testing.T) {
-	enginetest.TestMySqlDb(t, meta.NewDefaultMetaHarness())
+	enginetest.TestMySqlDb(t, NewDefaultDuckHarness())
 }
 
 // func TestReadOnlyDatabases(t *testing.T) {
-// 	enginetest.TestReadOnlyDatabases(t, meta.NewReadOnlyMetaHarness())
+// 	enginetest.TestReadOnlyDatabases(t, NewReadOnlyMetaHarness())
 // }
 
 // func TestReadOnlyVersionedQueries(t *testing.T) {
-// 	enginetest.TestReadOnlyVersionedQueries(t, meta.NewReadOnlyMetaHarness())
+// 	enginetest.TestReadOnlyVersionedQueries(t, NewReadOnlyMetaHarness())
 // }
 
 func TestColumnAliases(t *testing.T) {
-	enginetest.TestColumnAliases(t, meta.NewDefaultMetaHarness())
+	enginetest.TestColumnAliases(t, NewDefaultDuckHarness())
 }
 
 func TestDerivedTableOuterScopeVisibility(t *testing.T) {
-	harness := meta.NewDefaultMetaHarness()
+	harness := NewDefaultDuckHarness()
 	enginetest.TestDerivedTableOuterScopeVisibility(t, harness)
 }
 
 func TestOrderByGroupBy(t *testing.T) {
 	// TODO: window validation expecting error message
-	enginetest.TestOrderByGroupBy(t, meta.NewDefaultMetaHarness())
+	enginetest.TestOrderByGroupBy(t, NewDefaultDuckHarness())
 }
 
 func TestAmbiguousColumnResolution(t *testing.T) {
-	enginetest.TestAmbiguousColumnResolution(t, meta.NewDefaultMetaHarness())
+	enginetest.TestAmbiguousColumnResolution(t, NewDefaultDuckHarness())
 }
 
 func TestInsertInto(t *testing.T) {
-	harness := meta.NewDefaultMetaHarness()
+	harness := NewDefaultDuckHarness()
 	enginetest.TestInsertInto(t, harness)
 }
 
 func TestInsertIgnoreInto(t *testing.T) {
-	enginetest.TestInsertIgnoreInto(t, meta.NewDefaultMetaHarness())
+	enginetest.TestInsertIgnoreInto(t, NewDefaultDuckHarness())
 }
 
 func TestInsertDuplicateKeyKeyless(t *testing.T) {
-	enginetest.TestInsertDuplicateKeyKeyless(t, meta.NewDefaultMetaHarness())
+	enginetest.TestInsertDuplicateKeyKeyless(t, NewDefaultDuckHarness())
 }
 
 func TestIgnoreIntoWithDuplicateUniqueKeyKeyless(t *testing.T) {
-	enginetest.TestIgnoreIntoWithDuplicateUniqueKeyKeyless(t, meta.NewDefaultMetaHarness())
+	enginetest.TestIgnoreIntoWithDuplicateUniqueKeyKeyless(t, NewDefaultDuckHarness())
 }
 
 func TestInsertIntoErrors(t *testing.T) {
-	enginetest.TestInsertIntoErrors(t, meta.NewDefaultMetaHarness())
+	enginetest.TestInsertIntoErrors(t, NewDefaultDuckHarness())
 }
 
 func TestBrokenInsertScripts(t *testing.T) {
-	enginetest.TestBrokenInsertScripts(t, meta.NewDefaultMetaHarness())
+	enginetest.TestBrokenInsertScripts(t, NewDefaultDuckHarness())
 }
 
 func TestGeneratedColumns(t *testing.T) {
-	enginetest.TestGeneratedColumns(t, meta.NewDefaultMetaHarness())
+	enginetest.TestGeneratedColumns(t, NewDefaultDuckHarness())
 }
 
 func TestGeneratedColumnPlans(t *testing.T) {
-	enginetest.TestGeneratedColumnPlans(t, meta.NewDefaultMetaHarness())
+	enginetest.TestGeneratedColumnPlans(t, NewDefaultDuckHarness())
 }
 
 func TestSysbenchPlans(t *testing.T) {
-	enginetest.TestSysbenchPlans(t, meta.NewDefaultMetaHarness())
+	enginetest.TestSysbenchPlans(t, NewDefaultDuckHarness())
 }
 
 func TestStatistics(t *testing.T) {
-	enginetest.TestStatistics(t, meta.NewDefaultMetaHarness())
+	enginetest.TestStatistics(t, NewDefaultDuckHarness())
 }
 
 func TestStatisticIndexFilters(t *testing.T) {
-	enginetest.TestStatisticIndexFilters(t, meta.NewDefaultMetaHarness())
+	enginetest.TestStatisticIndexFilters(t, NewDefaultDuckHarness())
 }
 
 func TestSpatialInsertInto(t *testing.T) {
-	enginetest.TestSpatialInsertInto(t, meta.NewDefaultMetaHarness())
+	enginetest.TestSpatialInsertInto(t, NewDefaultDuckHarness())
 }
 
 func TestLoadData(t *testing.T) {
-	enginetest.TestLoadData(t, meta.NewDefaultMetaHarness())
+	enginetest.TestLoadData(t, NewDefaultDuckHarness())
 }
 
 func TestLoadDataErrors(t *testing.T) {
-	enginetest.TestLoadDataErrors(t, meta.NewDefaultMetaHarness())
+	enginetest.TestLoadDataErrors(t, NewDefaultDuckHarness())
 }
 
 func TestLoadDataFailing(t *testing.T) {
-	enginetest.TestLoadDataFailing(t, meta.NewDefaultMetaHarness())
+	enginetest.TestLoadDataFailing(t, NewDefaultDuckHarness())
 }
 
 func TestSelectIntoFile(t *testing.T) {
-	enginetest.TestSelectIntoFile(t, meta.NewDefaultMetaHarness())
+	enginetest.TestSelectIntoFile(t, NewDefaultDuckHarness())
 }
 
 func TestReplaceInto(t *testing.T) {
-	enginetest.TestReplaceInto(t, meta.NewDefaultMetaHarness())
+	enginetest.TestReplaceInto(t, NewDefaultDuckHarness())
 }
 
 func TestReplaceIntoErrors(t *testing.T) {
-	enginetest.TestReplaceIntoErrors(t, meta.NewDefaultMetaHarness())
+	enginetest.TestReplaceIntoErrors(t, NewDefaultDuckHarness())
 }
 
 func TestUpdate(t *testing.T) {
-	enginetest.TestUpdate(t, meta.NewMetaHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
+	enginetest.TestUpdate(t, NewDuckHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
 }
 
 func TestUpdateIgnore(t *testing.T) {
-	enginetest.TestUpdateIgnore(t, meta.NewMetaHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
+	enginetest.TestUpdateIgnore(t, NewDuckHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
 }
 
 func TestUpdateErrors(t *testing.T) {
 	// TODO different errors
-	enginetest.TestUpdateErrors(t, meta.NewMetaHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
+	enginetest.TestUpdateErrors(t, NewDuckHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
 }
 
 func TestOnUpdateExprScripts(t *testing.T) {
-	enginetest.TestOnUpdateExprScripts(t, meta.NewMetaHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
+	enginetest.TestOnUpdateExprScripts(t, NewDuckHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
 }
 
 func TestSpatialUpdate(t *testing.T) {
-	enginetest.TestSpatialUpdate(t, meta.NewMetaHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
+	enginetest.TestSpatialUpdate(t, NewDuckHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
 }
 
 func TestDeleteFromErrors(t *testing.T) {
-	enginetest.TestDeleteErrors(t, meta.NewMetaHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
+	enginetest.TestDeleteErrors(t, NewDuckHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
 }
 
 func TestSpatialDeleteFrom(t *testing.T) {
-	enginetest.TestSpatialDelete(t, meta.NewMetaHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
+	enginetest.TestSpatialDelete(t, NewDuckHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
 }
 
 func TestTruncate(t *testing.T) {
-	enginetest.TestTruncate(t, meta.NewMetaHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
+	enginetest.TestTruncate(t, NewDuckHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
 }
 
 func TestDeleteFrom(t *testing.T) {
-	enginetest.TestDelete(t, meta.NewMetaHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
+	enginetest.TestDelete(t, NewDuckHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
 }
 
 func TestConvert(t *testing.T) {
-	enginetest.TestConvert(t, meta.NewMetaHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
+	enginetest.TestConvert(t, NewDuckHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
 }
 
 func TestScripts(t *testing.T) {
-	enginetest.TestScripts(t, meta.NewMetaHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
+	enginetest.TestScripts(t, NewDuckHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
 }
 
 func TestSpatialScripts(t *testing.T) {
-	enginetest.TestSpatialScripts(t, meta.NewMetaHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
+	enginetest.TestSpatialScripts(t, NewDuckHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
 }
 
 func TestSpatialIndexScripts(t *testing.T) {
-	enginetest.TestSpatialIndexScripts(t, meta.NewMetaHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
+	enginetest.TestSpatialIndexScripts(t, NewDuckHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
 }
 
 func TestSpatialIndexPlans(t *testing.T) {
-	enginetest.TestSpatialIndexPlans(t, meta.NewMetaHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
+	enginetest.TestSpatialIndexPlans(t, NewDuckHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
 }
 
 func TestNumericErrorScripts(t *testing.T) {
-	enginetest.TestNumericErrorScripts(t, meta.NewMetaHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
+	enginetest.TestNumericErrorScripts(t, NewDuckHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
 }
 
 func TestUserPrivileges(t *testing.T) {
-	harness := meta.NewMetaHarness("default", 1, testNumPartitions, true, mergableIndexDriver)
+	harness := NewDuckHarness("default", 1, testNumPartitions, true, mergableIndexDriver)
 	if harness.IsUsingServer() {
 		t.Skip("TestUserPrivileges test depend on Context to switch the user to run test queries")
 	}
@@ -670,7 +662,7 @@ func TestUserPrivileges(t *testing.T) {
 }
 
 func TestUserAuthentication(t *testing.T) {
-	harness := meta.NewMetaHarness("default", 1, testNumPartitions, true, mergableIndexDriver)
+	harness := NewDuckHarness("default", 1, testNumPartitions, true, mergableIndexDriver)
 	if harness.IsUsingServer() {
 		t.Skip("TestUserPrivileges test depend on Context to switch the user to run test queries")
 	}
@@ -678,20 +670,20 @@ func TestUserAuthentication(t *testing.T) {
 }
 
 func TestPrivilegePersistence(t *testing.T) {
-	enginetest.TestPrivilegePersistence(t, meta.NewMetaHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
+	enginetest.TestPrivilegePersistence(t, NewDuckHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
 }
 
 func TestComplexIndexQueries(t *testing.T) {
-	harness := meta.NewMetaHarness("default", 1, testNumPartitions, true, mergableIndexDriver)
+	harness := NewDuckHarness("default", 1, testNumPartitions, true, mergableIndexDriver)
 	enginetest.TestComplexIndexQueries(t, harness)
 }
 
 func TestTriggers(t *testing.T) {
-	enginetest.TestTriggers(t, meta.NewDefaultMetaHarness())
+	enginetest.TestTriggers(t, NewDefaultDuckHarness())
 }
 
 func TestShowTriggers(t *testing.T) {
-	enginetest.TestShowTriggers(t, meta.NewDefaultMetaHarness())
+	enginetest.TestShowTriggers(t, NewDefaultDuckHarness())
 }
 
 func TestBrokenTriggers(t *testing.T) {
@@ -709,198 +701,198 @@ func TestStoredProcedures(t *testing.T) {
 			queries.ProcedureLogicTests = queries.ProcedureLogicTests[1:]
 		}
 	}
-	enginetest.TestStoredProcedures(t, meta.NewDefaultMetaHarness())
+	enginetest.TestStoredProcedures(t, NewDefaultDuckHarness())
 }
 
 func TestEvents(t *testing.T) {
-	enginetest.TestEvents(t, meta.NewDefaultMetaHarness())
+	enginetest.TestEvents(t, NewDefaultDuckHarness())
 }
 
 func TestTriggersErrors(t *testing.T) {
-	enginetest.TestTriggerErrors(t, meta.NewDefaultMetaHarness())
+	enginetest.TestTriggerErrors(t, NewDefaultDuckHarness())
 }
 
 func TestCreateTable(t *testing.T) {
-	enginetest.TestCreateTable(t, meta.NewDefaultMetaHarness())
+	enginetest.TestCreateTable(t, NewDefaultDuckHarness())
 }
 
 func TestRowLimit(t *testing.T) {
-	enginetest.TestRowLimit(t, meta.NewDefaultMetaHarness())
+	enginetest.TestRowLimit(t, NewDefaultDuckHarness())
 }
 
 func TestDropTable(t *testing.T) {
-	enginetest.TestDropTable(t, meta.NewDefaultMetaHarness())
+	enginetest.TestDropTable(t, NewDefaultDuckHarness())
 }
 
 func TestRenameTable(t *testing.T) {
-	enginetest.TestRenameTable(t, meta.NewDefaultMetaHarness())
+	enginetest.TestRenameTable(t, NewDefaultDuckHarness())
 }
 
 func TestRenameColumn(t *testing.T) {
-	enginetest.TestRenameColumn(t, meta.NewDefaultMetaHarness())
+	enginetest.TestRenameColumn(t, NewDefaultDuckHarness())
 }
 
 func TestAddColumn(t *testing.T) {
-	enginetest.TestAddColumn(t, meta.NewDefaultMetaHarness())
+	enginetest.TestAddColumn(t, NewDefaultDuckHarness())
 }
 
 func TestModifyColumn(t *testing.T) {
-	enginetest.TestModifyColumn(t, meta.NewDefaultMetaHarness())
+	enginetest.TestModifyColumn(t, NewDefaultDuckHarness())
 }
 
 func TestDropColumn(t *testing.T) {
-	enginetest.TestDropColumn(t, meta.NewDefaultMetaHarness())
+	enginetest.TestDropColumn(t, NewDefaultDuckHarness())
 }
 
 func TestDropColumnKeylessTables(t *testing.T) {
-	enginetest.TestDropColumnKeylessTables(t, meta.NewDefaultMetaHarness())
+	enginetest.TestDropColumnKeylessTables(t, NewDefaultDuckHarness())
 }
 
 func TestCreateDatabase(t *testing.T) {
-	enginetest.TestCreateDatabase(t, meta.NewDefaultMetaHarness())
+	enginetest.TestCreateDatabase(t, NewDefaultDuckHarness())
 }
 
 func TestPkOrdinalsDDL(t *testing.T) {
-	enginetest.TestPkOrdinalsDDL(t, meta.NewDefaultMetaHarness())
+	enginetest.TestPkOrdinalsDDL(t, NewDefaultDuckHarness())
 }
 
 func TestPkOrdinalsDML(t *testing.T) {
-	enginetest.TestPkOrdinalsDML(t, meta.NewDefaultMetaHarness())
+	enginetest.TestPkOrdinalsDML(t, NewDefaultDuckHarness())
 }
 
 func TestDropDatabase(t *testing.T) {
-	enginetest.TestDropDatabase(t, meta.NewDefaultMetaHarness())
+	enginetest.TestDropDatabase(t, NewDefaultDuckHarness())
 }
 
 func TestCreateForeignKeys(t *testing.T) {
-	enginetest.TestCreateForeignKeys(t, meta.NewDefaultMetaHarness())
+	enginetest.TestCreateForeignKeys(t, NewDefaultDuckHarness())
 }
 
 func TestDropForeignKeys(t *testing.T) {
-	enginetest.TestDropForeignKeys(t, meta.NewDefaultMetaHarness())
+	enginetest.TestDropForeignKeys(t, NewDefaultDuckHarness())
 }
 
 func TestForeignKeys(t *testing.T) {
-	enginetest.TestForeignKeys(t, meta.NewDefaultMetaHarness())
+	enginetest.TestForeignKeys(t, NewDefaultDuckHarness())
 }
 
 func TestFulltextIndexes(t *testing.T) {
-	enginetest.TestFulltextIndexes(t, meta.NewDefaultMetaHarness())
+	enginetest.TestFulltextIndexes(t, NewDefaultDuckHarness())
 }
 
 func TestCreateCheckConstraints(t *testing.T) {
-	enginetest.TestCreateCheckConstraints(t, meta.NewDefaultMetaHarness())
+	enginetest.TestCreateCheckConstraints(t, NewDefaultDuckHarness())
 }
 
 func TestChecksOnInsert(t *testing.T) {
-	enginetest.TestChecksOnInsert(t, meta.NewDefaultMetaHarness())
+	enginetest.TestChecksOnInsert(t, NewDefaultDuckHarness())
 }
 
 func TestChecksOnUpdate(t *testing.T) {
-	enginetest.TestChecksOnUpdate(t, meta.NewDefaultMetaHarness())
+	enginetest.TestChecksOnUpdate(t, NewDefaultDuckHarness())
 }
 
 func TestDisallowedCheckConstraints(t *testing.T) {
-	enginetest.TestDisallowedCheckConstraints(t, meta.NewDefaultMetaHarness())
+	enginetest.TestDisallowedCheckConstraints(t, NewDefaultDuckHarness())
 }
 
 func TestDropCheckConstraints(t *testing.T) {
-	enginetest.TestDropCheckConstraints(t, meta.NewDefaultMetaHarness())
+	enginetest.TestDropCheckConstraints(t, NewDefaultDuckHarness())
 }
 
 func TestReadOnly(t *testing.T) {
-	enginetest.TestReadOnly(t, meta.NewDefaultMetaHarness(), true /* testStoredProcedures */)
+	enginetest.TestReadOnly(t, NewDefaultDuckHarness(), true /* testStoredProcedures */)
 }
 
 func TestViews(t *testing.T) {
-	enginetest.TestViews(t, meta.NewDefaultMetaHarness())
+	enginetest.TestViews(t, NewDefaultDuckHarness())
 }
 
 // func TestVersionedViews(t *testing.T) {
-// 	enginetest.TestVersionedViews(t, meta.NewDefaultMetaHarness())
+// 	enginetest.TestVersionedViews(t, NewDefaultMetaHarness())
 // }
 
 func TestNaturalJoin(t *testing.T) {
-	enginetest.TestNaturalJoin(t, meta.NewDefaultMetaHarness())
+	enginetest.TestNaturalJoin(t, NewDefaultDuckHarness())
 }
 
 func TestWindowFunctions(t *testing.T) {
-	enginetest.TestWindowFunctions(t, meta.NewDefaultMetaHarness())
+	enginetest.TestWindowFunctions(t, NewDefaultDuckHarness())
 }
 
 func TestWindowRangeFrames(t *testing.T) {
-	enginetest.TestWindowRangeFrames(t, meta.NewDefaultMetaHarness())
+	enginetest.TestWindowRangeFrames(t, NewDefaultDuckHarness())
 }
 
 func TestNamedWindows(t *testing.T) {
-	enginetest.TestNamedWindows(t, meta.NewDefaultMetaHarness())
+	enginetest.TestNamedWindows(t, NewDefaultDuckHarness())
 }
 
 func TestNaturalJoinEqual(t *testing.T) {
-	enginetest.TestNaturalJoinEqual(t, meta.NewDefaultMetaHarness())
+	enginetest.TestNaturalJoinEqual(t, NewDefaultDuckHarness())
 }
 
 func TestNaturalJoinDisjoint(t *testing.T) {
-	enginetest.TestNaturalJoinDisjoint(t, meta.NewDefaultMetaHarness())
+	enginetest.TestNaturalJoinDisjoint(t, NewDefaultDuckHarness())
 }
 
 func TestInnerNestedInNaturalJoins(t *testing.T) {
-	enginetest.TestInnerNestedInNaturalJoins(t, meta.NewDefaultMetaHarness())
+	enginetest.TestInnerNestedInNaturalJoins(t, NewDefaultDuckHarness())
 }
 
 func TestColumnDefaults(t *testing.T) {
-	enginetest.TestColumnDefaults(t, meta.NewDefaultMetaHarness())
+	enginetest.TestColumnDefaults(t, NewDefaultDuckHarness())
 }
 
 func TestAlterTable(t *testing.T) {
-	enginetest.TestAlterTable(t, meta.NewDefaultMetaHarness())
+	enginetest.TestAlterTable(t, NewDefaultDuckHarness())
 }
 
 func TestDateParse(t *testing.T) {
-	harness := meta.NewDefaultMetaHarness()
+	harness := NewDefaultDuckHarness()
 	if harness.IsUsingServer() {
 		t.Skip("issue: https://github.com/dolthub/dolt/issues/6901")
 	}
-	enginetest.TestDateParse(t, meta.NewDefaultMetaHarness())
+	enginetest.TestDateParse(t, NewDefaultDuckHarness())
 }
 
 func TestJsonScripts(t *testing.T) {
 	var skippedTests []string = nil
-	enginetest.TestJsonScripts(t, meta.NewDefaultMetaHarness(), skippedTests)
+	enginetest.TestJsonScripts(t, NewDefaultDuckHarness(), skippedTests)
 }
 
 func TestShowTableStatus(t *testing.T) {
-	enginetest.TestShowTableStatus(t, meta.NewDefaultMetaHarness())
+	enginetest.TestShowTableStatus(t, NewDefaultDuckHarness())
 }
 
 func TestAddDropPks(t *testing.T) {
-	enginetest.TestAddDropPks(t, meta.NewDefaultMetaHarness())
+	enginetest.TestAddDropPks(t, NewDefaultDuckHarness())
 }
 
 func TestAddAutoIncrementColumn(t *testing.T) {
 	for _, script := range queries.AlterTableAddAutoIncrementScripts {
-		enginetest.TestScript(t, meta.NewDefaultMetaHarness(), script)
+		enginetest.TestScript(t, NewDefaultDuckHarness(), script)
 	}
 }
 
 func TestNullRanges(t *testing.T) {
-	enginetest.TestNullRanges(t, meta.NewDefaultMetaHarness())
+	enginetest.TestNullRanges(t, NewDefaultDuckHarness())
 }
 
 func TestBlobs(t *testing.T) {
-	enginetest.TestBlobs(t, meta.NewDefaultMetaHarness())
+	enginetest.TestBlobs(t, NewDefaultDuckHarness())
 }
 
 func TestIndexes(t *testing.T) {
-	enginetest.TestIndexes(t, meta.NewDefaultMetaHarness())
+	enginetest.TestIndexes(t, NewDefaultDuckHarness())
 }
 
 func TestIndexPrefix(t *testing.T) {
-	enginetest.TestIndexPrefix(t, meta.NewDefaultMetaHarness())
+	enginetest.TestIndexPrefix(t, NewDefaultDuckHarness())
 }
 
 func TestPersist(t *testing.T) {
-	harness := meta.NewDefaultMetaHarness()
+	harness := NewDefaultDuckHarness()
 	if harness.IsUsingServer() {
 		t.Skip("this test depends on Context, which ServerEngine does not depend on or update the current context")
 	}
@@ -919,7 +911,7 @@ func TestValidateSession(t *testing.T) {
 		count++
 	}
 
-	harness := meta.NewDefaultMetaHarness()
+	harness := NewDefaultDuckHarness()
 	if harness.IsUsingServer() {
 		t.Skip("It depends on ValidateSession() method call on context")
 	}
@@ -932,19 +924,19 @@ func TestValidateSession(t *testing.T) {
 }
 
 func TestPrepared(t *testing.T) {
-	enginetest.TestPrepared(t, meta.NewDefaultMetaHarness())
+	enginetest.TestPrepared(t, NewDefaultDuckHarness())
 }
 
 func TestPreparedInsert(t *testing.T) {
-	enginetest.TestPreparedInsert(t, meta.NewMetaHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
+	enginetest.TestPreparedInsert(t, NewDuckHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
 }
 
 func TestPreparedStatements(t *testing.T) {
-	enginetest.TestPreparedStatements(t, meta.NewDefaultMetaHarness())
+	enginetest.TestPreparedStatements(t, NewDefaultDuckHarness())
 }
 
 func TestCharsetCollationEngine(t *testing.T) {
-	harness := meta.NewDefaultMetaHarness()
+	harness := NewDefaultDuckHarness()
 	if harness.IsUsingServer() {
 		// Note: charset introducer needs to be handled with the SQLVal when preparing
 		//  e.g. what we do currently for `_utf16'hi'` is `_utf16 :v1` with v1 = "hi", instead of `:v1` with v1 = "_utf16'hi'".
@@ -957,7 +949,7 @@ func TestCharsetCollationWire(t *testing.T) {
 	if _, ok := os.LookupEnv("CI_TEST"); !ok {
 		t.Skip("Skipping test that requires CI_TEST=true")
 	}
-	harness := meta.NewDefaultMetaHarness()
+	harness := NewDefaultDuckHarness()
 	enginetest.TestCharsetCollationWire(t, harness, harness.SessionBuilder())
 }
 
@@ -965,7 +957,7 @@ func TestDatabaseCollationWire(t *testing.T) {
 	if _, ok := os.LookupEnv("CI_TEST"); !ok {
 		t.Skip("Skipping test that requires CI_TEST=true")
 	}
-	harness := meta.NewDefaultMetaHarness()
+	harness := NewDefaultDuckHarness()
 	enginetest.TestDatabaseCollationWire(t, harness, harness.SessionBuilder())
 }
 
@@ -973,7 +965,7 @@ func TestTypesOverWire(t *testing.T) {
 	if _, ok := os.LookupEnv("CI_TEST"); !ok {
 		t.Skip("Skipping test that requires CI_TEST=true")
 	}
-	harness := meta.NewDefaultMetaHarness()
+	harness := NewDefaultDuckHarness()
 	enginetest.TestTypesOverWire(t, harness, harness.SessionBuilder())
 }
 
@@ -1059,12 +1051,12 @@ func findTable(dbs []sql.Database, tableName string) (sql.Database, sql.Table) {
 }
 
 func TestSQLLogicTests(t *testing.T) {
-	enginetest.TestSQLLogicTests(t, meta.NewMetaHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
+	enginetest.TestSQLLogicTests(t, NewDuckHarness("default", 1, testNumPartitions, true, mergableIndexDriver))
 }
 
 // func TestSQLLogicTestFiles(t *testing.T) {
 // 	t.Skip()
-// 	h := memharness.NewMemoryHarness(meta.NewDefaultMetaHarness())
+// 	h := memharness.NewMemoryHarness(NewDefaultMetaHarness())
 // 	paths := []string{
 // 		"./sqllogictest/testdata/join/join.txt",
 // 		"./sqllogictest/testdata/join/subquery_correlated.txt",
