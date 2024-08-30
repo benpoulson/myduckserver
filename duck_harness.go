@@ -91,7 +91,7 @@ func NewDuckHarness(name string, parallelism int, numTablePartitions int, useNat
 }
 
 func NewDefaultDuckHarness() *DuckHarness {
-	return NewDuckHarness("default", 1, testNumPartitions, true, nil)
+	return NewDuckHarness("default", 1, testNumPartitions, false, nil)
 }
 
 // func NewReadOnlyDuckHarness() *DuckHarness {
@@ -215,7 +215,31 @@ func NewEngine(t *testing.T, harness enginetest.Harness, dbProvider sql.Database
 	if len(setupData) == 0 {
 		setupData = setup.MydbData
 	}
-	return enginetest.RunSetupScripts(ctx, e, setupData, supportsIndexes)
+	return RunSetupScripts(ctx, e, setupData, supportsIndexes)
+}
+
+// RunSetupScripts runs the given setup scripts on the given engine, returning any error
+func RunSetupScripts(ctx *sql.Context, e *sqle.Engine, scripts []setup.SetupScript, createIndexes bool) (*sqle.Engine, error) {
+	for i := range scripts {
+		for _, s := range scripts[i] {
+			if !createIndexes {
+				if strings.Contains(s, "create index") || strings.Contains(s, "create unique index") {
+					continue
+				}
+			}
+			// ctx.GetLogger().Warnf("running query %s\n", s)
+			ctx := ctx.WithQuery(s)
+			_, iter, _, err := e.Query(ctx, s)
+			if err != nil {
+				return nil, err
+			}
+			_, err = sql.RowIterToRows(ctx, iter)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return e, nil
 }
 
 func (m *DuckHarness) SupportsNativeIndexCreation() bool {
