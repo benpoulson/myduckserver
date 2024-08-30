@@ -39,10 +39,10 @@ const testNumPartitions = 5
 type IndexDriverInitializer func([]sql.Database) sql.IndexDriver
 
 type MetaHarness struct {
-	name                      string
-	parallelism               int
-	numTablePartitions        int
-	readonly                  bool
+	name               string
+	parallelism        int
+	numTablePartitions int
+	//	readonly                  bool
 	provider                  sql.DatabaseProvider
 	indexDriverInitializer    IndexDriverInitializer
 	driver                    sql.IndexDriver
@@ -93,11 +93,11 @@ func NewDefaultMetaHarness() *MetaHarness {
 	return NewMetaHarness("default", 1, testNumPartitions, true, nil)
 }
 
-func NewReadOnlyMetaHarness() *MetaHarness {
-	h := NewDefaultMetaHarness()
-	h.readonly = true
-	return h
-}
+// func NewReadOnlyMetaHarness() *MetaHarness {
+// 	h := NewDefaultMetaHarness()
+// 	h.readonly = true
+// 	return h
+// }
 
 func (m *MetaHarness) SessionBuilder() server.SessionBuilder {
 	return func(ctx context.Context, c *mysql.Conn, addr string) (sql.Session, error) {

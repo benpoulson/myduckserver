@@ -7,6 +7,7 @@ require (
 	github.com/Shopify/toxiproxy/v2 v2.9.0
 	github.com/dolthub/doltgresql v0.11.1
 	github.com/dolthub/go-mysql-server v0.18.2-0.20240815142344-761713e36043
+	github.com/dolthub/sqllogictest/go v0.0.0-20240618184124-ca47f9354216
 	github.com/dolthub/vitess v0.0.0-20240807181005-71d735078e24
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/jmoiron/sqlx v1.4.0
