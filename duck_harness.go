@@ -201,11 +201,7 @@ func NewEngine(t *testing.T, harness enginetest.Harness, dbProvider sql.Database
 	e.Analyzer.Catalog.StatsProvider = statsProvider
 
 	provider := dbProvider.(*meta.DbProvider)
-	builder := &DuckBuilder{
-		provider: provider,
-		base:     e.Analyzer.ExecBuilder,
-		db:       provider.Storage(),
-	}
+	builder := NewDuckBuilder(e.Analyzer.ExecBuilder, provider.Storage(), provider.CatalogName())
 	e.Analyzer.ExecBuilder = builder
 
 	ctx := enginetest.NewContext(harness)
