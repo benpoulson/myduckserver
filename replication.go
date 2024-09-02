@@ -70,7 +70,7 @@ func (twp *tableWriterProvider) newTableAppender(
 	databaseName, tableName string,
 	columnCount int,
 ) (*tableAppender, error) {
-	connector, err := duckdb.NewConnector(dbFile, nil)
+	connector, err := duckdb.NewConnector(dbFilePath, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -869,6 +869,7 @@ func startDoltSqlServer(dir string, doltPersistentSystemVars map[string]string) 
 	args := []string{"go", "run", ".",
 		// "--loglevel=TRACE",
 		fmt.Sprintf("--port=%v", doltPort),
+		fmt.Sprintf("--datadir=%s", dir),
 	}
 
 	// If we're running in CI, use a precompiled dolt binary instead of go run
