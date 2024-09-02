@@ -43,6 +43,11 @@ func registerReplicaController(provider *meta.DbProvider, engine *sqle.Engine, d
 	replica.SetTableWriterProvider(&tableWriterProvider{db: db})
 
 	engine.Analyzer.Catalog.BinlogReplicaController = binlogreplication.MyBinlogReplicaController
+
+	// If we're unable to restart replication, log an error, but don't prevent the server from starting up
+	if err := binlogreplication.MyBinlogReplicaController.AutoStart(ctx); err != nil {
+		logrus.Errorf("unable to restart replication: %s", err.Error())
+	}
 }
 
 type tableWriterProvider struct {
