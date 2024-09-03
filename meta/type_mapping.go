@@ -31,12 +31,27 @@ func newDuckTypeLength(str, extra string, length int64) duckType {
 	return newDuckType(str, fmt.Sprintf("%s(%d)", extra, length))
 }
 
+func newNumberType(str string, displayWidth int) duckType {
+	return newDuckTypeLength(str, str, int64(displayWidth))
+}
+
+func newMediumIntType(displayWidth int) duckType {
+	return newDuckTypeLength("INTEGER", "MEDIUMINT", int64(displayWidth))
+}
+
+func newUnsignedMediumIntType(displayWidth int) duckType {
+	return newDuckTypeLength("UINTEGER", "UMEDIUMINT", int64(displayWidth))
+}
+
 func (d duckType) decodeExtra() (string, int64) {
 	if d.extra == "" {
 		return "", 0
 	}
-
 	extraParts := strings.Split(d.extra, "(")
+	if len(extraParts) == 1 {
+		// no parameters
+		return d.extra, 0
+	}
 	if len(extraParts) != 2 {
 		panic(fmt.Sprintf("invalid extra string: %s", d.extra))
 	}
@@ -51,27 +66,29 @@ func (d duckType) decodeExtra() (string, int64) {
 const DuckDBDecimalTypeMaxPrecision = 38
 
 func duckdbDataType(mysqlType sql.Type) (duckType, error) {
+
+	// ugly ? no, AI helps us
 	switch mysqlType.Type() {
 	case sqltypes.Int8:
-		return newDT("TINYINT"), nil
+		return newNumberType("TINYINT", mysqlType.(sql.NumberType).DisplayWidth()), nil
 	case sqltypes.Uint8:
-		return newDT("UTINYINT"), nil
+		return newNumberType("UTINYINT", mysqlType.(sql.NumberType).DisplayWidth()), nil
 	case sqltypes.Int16:
-		return newDT("SMALLINT"), nil
+		return newNumberType("SMALLINT", mysqlType.(sql.NumberType).DisplayWidth()), nil
 	case sqltypes.Uint16:
-		return newDT("USMALLINT"), nil
+		return newNumberType("USMALLINT", mysqlType.(sql.NumberType).DisplayWidth()), nil
 	case sqltypes.Int24:
-		return newDT("INTEGER"), nil
+		return newMediumIntType(mysqlType.(sql.NumberType).DisplayWidth()), nil
 	case sqltypes.Uint24:
-		return newDT("UINTEGER"), nil
+		return newUnsignedMediumIntType(mysqlType.(sql.NumberType).DisplayWidth()), nil
 	case sqltypes.Int32:
-		return newDT("INTEGER"), nil
+		return newNumberType("INTEGER", mysqlType.(sql.NumberType).DisplayWidth()), nil
 	case sqltypes.Uint32:
-		return newDT("UINTEGER"), nil
+		return newNumberType("UINTEGER", mysqlType.(sql.NumberType).DisplayWidth()), nil
 	case sqltypes.Int64:
-		return newDT("BIGINT"), nil
+		return newNumberType("BIGINT", mysqlType.(sql.NumberType).DisplayWidth()), nil
 	case sqltypes.Uint64:
-		return newDT("UBIGINT"), nil
+		return newNumberType("UBIGINT", mysqlType.(sql.NumberType).DisplayWidth()), nil
 	case sqltypes.Float32:
 		return newDT("FLOAT"), nil
 	case sqltypes.Float64:
@@ -109,7 +126,7 @@ func duckdbDataType(mysqlType sql.Type) (duckType, error) {
 	case sqltypes.VarBinary:
 		return newDuckTypeLength("BLOB", "VARBINARY", mysqlType.(sql.StringType).MaxCharacterLength()), nil
 	case sqltypes.Char:
-		return newDuckTypeLength("CHAR", "CHAR", mysqlType.(sql.StringType).MaxCharacterLength()), nil
+		return newDuckTypeLength("VARCHAR", "CHAR", mysqlType.(sql.StringType).MaxCharacterLength()), nil
 	case sqltypes.Binary:
 		return newDuckTypeLength("BLOB", "BINARY", mysqlType.(sql.StringType).MaxCharacterLength()), nil
 	case sqltypes.Bit:
@@ -131,35 +148,58 @@ func mysqlDataType(duckdbType duckType, numericPrecision uint8, numericScale uin
 		duckdbTypeStr = "DECIMAL"
 	}
 
+	myType, length := duckdbType.decodeExtra()
+
+	// process integer types, they all have displayWidth
+	intBaseType := sqltypes.Null
 	switch duckdbTypeStr {
 	case "TINYINT":
-		return types.Int8
+		intBaseType = sqltypes.Int8
 	case "UTINYINT":
-		return types.Uint8
+		intBaseType = sqltypes.Uint8
 	case "SMALLINT":
 		{
-			if duckdbType.extra == "YEAR" {
+			if myType == "YEAR" {
 				return types.Year
 			}
-			return types.Int16
+			intBaseType = sqltypes.Int16
 		}
 	case "USMALLINT":
-		return types.Uint16
+		intBaseType = sqltypes.Uint16
 	case "INTEGER":
-		return types.Int32
+		{
+			if myType == "MEDIUMINT" {
+				intBaseType = sqltypes.Int24
+			} else {
+				intBaseType = sqltypes.Int32
+			}
+		}
 	case "UINTEGER":
-		return types.Uint32
+		{
+			if myType == "UMEDIUMINT" {
+				intBaseType = sqltypes.Uint24
+			} else {
+				intBaseType = sqltypes.Uint32
+			}
+		}
 	case "BIGINT":
-		return types.Int64
+		intBaseType = sqltypes.Int64
 	case "UBIGINT":
-		return types.Uint64
+		intBaseType = sqltypes.Uint64
+	}
+
+	if intBaseType != sqltypes.Null {
+		return types.MustCreateNumberTypeWithDisplayWidth(intBaseType, int(length))
+	}
+
+	switch duckdbTypeStr {
 	case "FLOAT":
 		return types.Float32
 	case "DOUBLE":
 		return types.Float64
 	case "TIMESTAMP":
 		{
-			if duckdbType.extra == "DATETIME" {
+			if myType == "DATETIME" {
 				return types.Datetime
 			}
 			return types.Timestamp
@@ -172,7 +212,6 @@ func mysqlDataType(duckdbType duckType, numericPrecision uint8, numericScale uin
 		return types.MustCreateDecimalType(numericPrecision, numericScale)
 	case "VARCHAR":
 		{
-			myType, length := duckdbType.decodeExtra()
 			if myType == "TEXT" {
 				if length <= types.TinyTextBlobMax {
 					return types.TinyText
@@ -185,12 +224,13 @@ func mysqlDataType(duckdbType duckType, numericPrecision uint8, numericScale uin
 				}
 			} else if myType == "VARCHAR" {
 				return types.MustCreateStringWithDefaults(sqltypes.VarChar, length)
+			} else if myType == "CHAR" {
+				return types.MustCreateStringWithDefaults(sqltypes.Char, length)
 			}
 			return types.Text
 		}
 	case "BLOB":
 		{
-			myType, length := duckdbType.decodeExtra()
 
 			if myType == "BLOB" {
 				if length <= types.TinyTextBlobMax {
@@ -209,19 +249,8 @@ func mysqlDataType(duckdbType duckType, numericPrecision uint8, numericScale uin
 			}
 			return types.Blob
 		}
-	case "CHAR":
-		{
-			myType, length := duckdbType.decodeExtra()
-
-			if myType == "CHAR" {
-				return types.MustCreateStringWithDefaults(sqltypes.Char, length)
-			}
-			return types.Text
-		}
 	case "BIT":
 		{
-			myType, length := duckdbType.decodeExtra()
-
 			if myType == "BIT" {
 				return types.MustCreateBitType(uint8(length))
 			}

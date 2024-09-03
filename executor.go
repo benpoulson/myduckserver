@@ -65,6 +65,9 @@ func (b *DuckBuilder) GetConn(ctx context.Context, id uint32, schemaName string)
 			return nil, err
 		} else if currentSchema != schemaName {
 			if _, err := conn.ExecContext(ctx, "USE "+meta.FullSchemaName(b.catalogName, schemaName)); err != nil {
+				if meta.IsDuckDBSetSchemaNotFoundError(err) {
+					return nil, sql.ErrDatabaseNotFound.New(schemaName)
+				}
 				logrus.WithField("schema", schemaName).WithError(err).Error("Failed to switch schema")
 				return nil, err
 			}
@@ -92,11 +95,6 @@ func (b *DuckBuilder) Build(ctx *sql.Context, root sql.Node, r sql.Row) (sql.Row
 		"NodeType": fmt.Sprintf("%T", n),
 	}).Infoln("Building node:", n)
 
-	// Handle special queries
-	switch ctx.Query() {
-	case "SELECT DATABASE()":
-		return b.base.Build(ctx, root, r)
-	}
 	// TODO; find a better way to fallback to the base builder
 	switch n.(type) {
 	case *plan.CreateDB, *plan.DropDB, *plan.DropTable, *plan.RenameTable,
@@ -107,17 +105,8 @@ func (b *DuckBuilder) Build(ctx *sql.Context, root sql.Node, r sql.Row) (sql.Row
 		return b.base.Build(ctx, root, r)
 	}
 
-	// Fallback to the base builder if the plan contains system/user variables
-	foundVariable := false
-	transform.InspectExpressions(n, func(e sql.Expression) bool {
-		switch e.(type) {
-		case *expression.SystemVar, *expression.UserVar:
-			foundVariable = true
-			return false
-		}
-		return true
-	})
-	if foundVariable {
+	// Fallback to the base builder if the plan contains system/user variables or is not a pure data query.
+	if containsVariable(n) || !isPureDataQuery(n) {
 		return b.base.Build(ctx, root, r)
 	}
 
@@ -132,6 +121,9 @@ func (b *DuckBuilder) Build(ctx *sql.Context, root sql.Node, r sql.Row) (sql.Row
 	case *plan.Use:
 		useStmt := "USE " + meta.FullSchemaName(b.catalogName, node.Database().Name())
 		if _, err := conn.ExecContext(ctx.Context, useStmt); err != nil {
+			if meta.IsDuckDBSetSchemaNotFoundError(err) {
+				return nil, sql.ErrDatabaseNotFound.New(node.Database().Name())
+			}
 			return nil, err
 		}
 		return b.base.Build(ctx, root, r)
@@ -157,9 +149,6 @@ func (b *DuckBuilder) Build(ctx *sql.Context, root sql.Node, r sql.Row) (sql.Row
 	case *plan.DeleteFrom:
 		return b.executeDML(ctx, n, conn)
 	case *plan.Truncate:
-		if node.DatabaseName() == "mysql" {
-			return sql.RowsToRowIter(sql.NewRow(types.OkResult{})), nil
-		}
 		return b.executeDML(ctx, n, conn)
 	default:
 		return b.base.Build(ctx, n, r)
@@ -246,4 +235,52 @@ func (b *DuckBuilder) executeDML(ctx *sql.Context, n sql.Node, conn *stdsql.Conn
 		RowsAffected: uint64(affected),
 		InsertID:     uint64(insertId),
 	})), nil
+}
+
+// containsVariable inspects if the plan contains a system or user variable.
+func containsVariable(n sql.Node) bool {
+	found := false
+	transform.InspectExpressions(n, func(e sql.Expression) bool {
+		switch e.(type) {
+		case *expression.SystemVar, *expression.UserVar:
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// isPureDataQuery inspects if the plan is a pure data query,
+// i.e., it operates on (>=1) data tables and does not touch any system tables.
+// The following examples are NOT pure data queries:
+// - `SELECT * FROM mysql.*`
+// - `TRUNCATE mysql.user`
+// - `SELECT DATABASE()`
+func isPureDataQuery(n sql.Node) bool {
+	c := &tableNodeCollector{}
+	transform.Walk(c, n)
+	if len(c.tables) == 0 {
+		return false
+	}
+	for _, tn := range c.tables {
+		switch tn.Database().Name() {
+		case "mysql", "information_schema", "performance_schema", "sys":
+			return false
+		}
+	}
+	return true
+}
+
+type tableNodeCollector struct {
+	tables []sql.TableNode
+}
+
+func (c *tableNodeCollector) Visit(n sql.Node) transform.Visitor {
+	if n == nil {
+		return nil
+	} else if tn, ok := n.(sql.TableNode); ok {
+		c.tables = append(c.tables, tn)
+	}
+	return c
 }
