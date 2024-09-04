@@ -36,7 +36,8 @@ jobs:
         unzip duckdb_cli-linux-amd64.zip
         chmod +x duckdb
         sudo mv duckdb /usr/local/bin
-        duckdb -c 'INSTALL json;'
+        duckdb -c 'INSTALL json from core'
+        duckdb -c 'SELECT extension_name, loaded, install_path FROM duckdb_extensions() where installed'
 
     - name: Build
       run: go build -v
