@@ -40,3 +40,18 @@ func DecodeIndexName(encodedName string) (string, string) {
 	}
 	return parts[0], parts[1]
 }
+
+// DecodeColumnName extracts column names from a SQL string, Only consider single-column indexes or multi-column indexes
+func DecodeColumnName(sql_string string) []string {
+	leftParen := strings.Index(sql_string, "(")
+	rightParen := strings.Index(sql_string, ")")
+	if leftParen != -1 && rightParen != -1 {
+		content := sql_string[leftParen+1 : rightParen]
+		columns := strings.Split(content, ",")
+		for i, col := range columns {
+			columns[i] = strings.TrimSpace(col)
+		}
+		return columns
+	}
+	return []string{}
+}

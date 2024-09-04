@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/marcboeker/go-duckdb"
 	"github.com/sirupsen/logrus"
 )
@@ -358,7 +359,7 @@ func (t *Table) GetIndexes(ctx *sql.Context) ([]sql.Index, error) {
 	defer t.mu.RUnlock()
 
 	// Query to get the indexes for the table
-	rows, err := t.db.storage.Query(`SELECT index_name, is_unique, comment FROM duckdb_indexes() WHERE database_name = ? AND schema_name = ? AND table_name = ?`,
+	rows, err := t.db.storage.Query(`SELECT index_name, is_unique, comment, sql FROM duckdb_indexes() WHERE database_name = ? AND schema_name = ? AND table_name = ?`,
 		t.db.catalogName, t.db.name, t.name)
 	if err != nil {
 		return nil, ErrDuckDB.New(err)
@@ -370,14 +371,40 @@ func (t *Table) GetIndexes(ctx *sql.Context) ([]sql.Index, error) {
 		var encodedIndexName string
 		var comment stdsql.NullString
 		var isUnique bool
+		var sql_string string
+		var exprs []sql.Expression
 
-		if err := rows.Scan(&encodedIndexName, &isUnique, &comment); err != nil {
+		if err := rows.Scan(&encodedIndexName, &isUnique, &comment, &sql_string); err != nil {
 			return nil, ErrDuckDB.New(err)
 		}
 
 		_, indexName := DecodeIndexName(encodedIndexName)
+		columnNames := DecodeColumnName(sql_string)
 
-		indexes = append(indexes, NewIndex(t.db.name, t.name, indexName, isUnique, DecodeComment(comment.String)))
+		decodedComment := DecodeComment(comment.String)
+
+		for _, columnName := range columnNames {
+			// Query to get the column information for the index
+			column_rows, err := t.db.storage.Query(`SELECT column_index, table_oid, data_type, is_nullable, numeric_precision, numeric_scale FROM duckdb_columns() WHERE database_name = ? AND schema_name = ? AND table_name = ? AND column_name = ?`,
+				t.db.catalogName, t.db.name, t.name, columnName)
+			if err != nil {
+				return nil, ErrDuckDB.New(err)
+			}
+			defer column_rows.Close()
+			if column_rows.Next() {
+				var columnIndex int
+				var isNullable bool
+				var dataType string
+				var tableId int
+				var numericPrecision, numericScale stdsql.NullInt32
+				if err := column_rows.Scan(&columnIndex, &tableId, &dataType, &isNullable, &numericPrecision, &numericScale); err != nil {
+					return nil, ErrDuckDB.New(err)
+				}
+				data_type := mysqlDataType(newDuckType(dataType, decodedComment.Meta), uint8(numericPrecision.Int32), uint8(numericScale.Int32))
+				exprs = append(exprs, expression.NewGetFieldWithTable(columnIndex, tableId, data_type, t.db.name, t.name, columnName, isNullable))
+			}
+		}
+		indexes = append(indexes, NewIndex(t.db.name, t.name, indexName, isUnique, DecodeComment(comment.String), exprs))
 	}
 
 	if err := rows.Err(); err != nil {
