@@ -42,11 +42,11 @@ func DecodeIndexName(encodedName string) (string, string) {
 }
 
 // DecodeCreateindex extracts column names from a SQL string, Only consider single-column indexes or multi-column indexes
-func DecodeCreateindex(createindexSQL string) []string {
-	leftParen := strings.Index(createindexSQL, "(")
-	rightParen := strings.Index(createindexSQL, ")")
+func DecodeCreateindex(createIndexSQL string) []string {
+	leftParen := strings.Index(createIndexSQL, "(")
+	rightParen := strings.Index(createIndexSQL, ")")
 	if leftParen != -1 && rightParen != -1 {
-		content := createindexSQL[leftParen+1 : rightParen]
+		content := createIndexSQL[leftParen+1 : rightParen]
 		columns := strings.Split(content, ",")
 		for i, col := range columns {
 			columns[i] = strings.TrimSpace(col)

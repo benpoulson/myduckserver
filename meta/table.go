@@ -28,6 +28,10 @@ type ColumnInfo struct {
 	ColumnDefault stdsql.NullString
 	Comment       stdsql.NullString
 }
+type IndexedTable struct {
+	*Table
+	Lookup sql.IndexLookup
+}
 
 var _ sql.Table = (*Table)(nil)
 var _ sql.PrimaryKeyTable = (*Table)(nil)
@@ -377,15 +381,15 @@ func (t *Table) GetIndexes(ctx *sql.Context) ([]sql.Index, error) {
 		var encodedIndexName string
 		var comment stdsql.NullString
 		var isUnique bool
-		var createindexSQL string
+		var createIndexSQL string
 		var exprs []sql.Expression
 
-		if err := rows.Scan(&encodedIndexName, &isUnique, &comment, &createindexSQL); err != nil {
+		if err := rows.Scan(&encodedIndexName, &isUnique, &comment, &createIndexSQL); err != nil {
 			return nil, ErrDuckDB.New(err)
 		}
 
 		_, indexName := DecodeIndexName(encodedIndexName)
-		columnNames := DecodeCreateindex(createindexSQL)
+		columnNames := DecodeCreateindex(createIndexSQL)
 
 		placeholders := make([]string, len(columnNames))
 		columns_args := make([]interface{}, len(columnNames))
@@ -423,7 +427,7 @@ func (t *Table) GetIndexes(ctx *sql.Context) ([]sql.Index, error) {
 
 // IndexedAccess implements sql.IndexAddressableTable.
 func (t *Table) IndexedAccess(lookup sql.IndexLookup) sql.IndexedTable {
-	panic("unimplemented")
+	return &IndexedTable{Table: t, Lookup: lookup}
 }
 
 // PreciseMatch implements sql.IndexAddressableTable.
@@ -458,4 +462,9 @@ func extractColumnInfo(rows *stdsql.Rows) (*ColumnInfo, error) {
 		Comment:       comment,
 	}
 	return columnInfo, nil
+}
+
+func (t *IndexedTable) LookupPartitions(ctx *sql.Context, lookup sql.IndexLookup) (sql.PartitionIter, error) {
+
+	return nil, nil
 }
