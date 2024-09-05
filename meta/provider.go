@@ -50,8 +50,14 @@ func NewDBProvider(dataDir, dbFile string) (*DbProvider, error) {
 	if err != nil {
 		return nil, err
 	}
-	// load json extension
-	_, err = storage.Exec("load json")
+
+	// install the json extension
+	_, err = storage.Exec("INSTALL json")
+	if err != nil {
+		return nil, err
+	}
+	// load the json extension
+	_, err = storage.Exec("LOAD json")
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +149,7 @@ func (prov *DbProvider) HasDatabase(ctx *sql.Context, name string) bool {
 }
 
 func hasDatabase(engine *stdsql.DB, dstName string, name string) (bool, error) {
-	rows, err := engine.Query("SELECT DISTINCT schema_name FROM information_schema.schemata WHERE catalog_name = ? AND schema_name = ?", dstName, name)
+	rows, err := engine.Query("SELECT DISTINCT schema_name FROM information_schema.schemata WHERE catalog_name = ? AND schema_name = ?", dstName, strings.ToLower(name))
 	if err != nil {
 		return false, ErrDuckDB.New(err)
 	}
