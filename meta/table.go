@@ -19,6 +19,16 @@ type Table struct {
 	comment *Comment // save the comment to avoid querying duckdb everytime
 }
 
+type ColumnInfo struct {
+	ColumnName    string
+	ColumnIndex   int
+	TableID       int
+	DataType      sql.Type
+	IsNullable    bool
+	ColumnDefault stdsql.NullString
+	Comment       stdsql.NullString
+}
+
 var _ sql.Table = (*Table)(nil)
 var _ sql.PrimaryKeyTable = (*Table)(nil)
 var _ sql.AlterableTable = (*Table)(nil)
@@ -73,7 +83,7 @@ func (t *Table) Schema() sql.Schema {
 
 func (t *Table) schema() sql.Schema {
 	rows, err := t.db.storage.Query(`
-		SELECT column_name, data_type, is_nullable, column_default, comment, numeric_precision, numeric_scale FROM duckdb_columns() WHERE database_name = ? AND schema_name = ? AND table_name = ?
+		SELECT column_name, column_index, table_oid, data_type, is_nullable, column_default, comment, numeric_precision, numeric_scale FROM duckdb_columns() WHERE database_name = ? AND schema_name = ? AND table_name = ?
 	`, t.db.catalogName, t.db.name, t.name)
 	if err != nil {
 		panic(ErrDuckDB.New(err))
@@ -82,26 +92,22 @@ func (t *Table) schema() sql.Schema {
 
 	var schema sql.Schema
 	for rows.Next() {
-		var columnName, dataType string
-		var isNullable bool
-		var columnDefault stdsql.NullString
-		var comment stdsql.NullString
-		var numericPrecision, numericScale stdsql.NullInt32
-		if err := rows.Scan(&columnName, &dataType, &isNullable, &columnDefault, &comment, &numericPrecision, &numericScale); err != nil {
+		columnInfo, err := extractColumnInfo(rows)
+		if err != nil {
 			panic(ErrDuckDB.New(err))
 		}
 
 		defaultValue := (*sql.ColumnDefaultValue)(nil)
-		if columnDefault.Valid {
-			defaultValue = sql.NewUnresolvedColumnDefaultValue(columnDefault.String)
+		if columnInfo.ColumnDefault.Valid {
+			defaultValue = sql.NewUnresolvedColumnDefaultValue(columnInfo.ColumnDefault.String)
 		}
 
-		decodedComment := DecodeComment(comment.String)
+		decodedComment := DecodeComment(columnInfo.Comment.String)
 
 		column := &sql.Column{
-			Name:           columnName,
-			Type:           mysqlDataType(newDuckType(dataType, decodedComment.Meta), uint8(numericPrecision.Int32), uint8(numericScale.Int32)),
-			Nullable:       isNullable,
+			Name:           columnInfo.ColumnName,
+			Type:           columnInfo.DataType,
+			Nullable:       columnInfo.IsNullable,
 			Source:         t.name,
 			DatabaseSource: t.db.name,
 			Default:        defaultValue,
@@ -371,39 +377,40 @@ func (t *Table) GetIndexes(ctx *sql.Context) ([]sql.Index, error) {
 		var encodedIndexName string
 		var comment stdsql.NullString
 		var isUnique bool
-		var sql_string string
+		var createindexSQL string
 		var exprs []sql.Expression
 
-		if err := rows.Scan(&encodedIndexName, &isUnique, &comment, &sql_string); err != nil {
+		if err := rows.Scan(&encodedIndexName, &isUnique, &comment, &createindexSQL); err != nil {
 			return nil, ErrDuckDB.New(err)
 		}
 
 		_, indexName := DecodeIndexName(encodedIndexName)
-		columnNames := DecodeColumnName(sql_string)
+		columnNames := DecodeCreateindex(createindexSQL)
 
-		decodedComment := DecodeComment(comment.String)
+		placeholders := make([]string, len(columnNames))
+		columns_args := make([]interface{}, len(columnNames))
 
-		for _, columnName := range columnNames {
-			// Query to get the column information for the index
-			column_rows, err := t.db.storage.Query(`SELECT column_index, table_oid, data_type, is_nullable, numeric_precision, numeric_scale FROM duckdb_columns() WHERE database_name = ? AND schema_name = ? AND table_name = ? AND column_name = ?`,
-				t.db.catalogName, t.db.name, t.name, columnName)
+		for i := range columnNames {
+			placeholders[i] = "?"
+			columns_args[i] = columnNames[i]
+		}
+		args := append([]interface{}{t.db.catalogName, t.db.name, t.name}, columns_args...)
+
+		// Query to get the column information for the index
+		query := fmt.Sprintf(`SELECT column_name, column_index, table_oid, data_type, is_nullable, column_default, comment, numeric_precision, numeric_scale FROM duckdb_columns() WHERE database_name = ? AND schema_name = ? AND table_name = ? AND column_name IN (%s)`, strings.Join(placeholders, ","))
+		column_rows, err := t.db.storage.Query(query, args...)
+		if err != nil {
+			return nil, ErrDuckDB.New(err)
+		}
+		defer column_rows.Close()
+		for column_rows.Next() {
+			columnInfo, err := extractColumnInfo(column_rows)
 			if err != nil {
 				return nil, ErrDuckDB.New(err)
 			}
-			defer column_rows.Close()
-			if column_rows.Next() {
-				var columnIndex int
-				var isNullable bool
-				var dataType string
-				var tableId int
-				var numericPrecision, numericScale stdsql.NullInt32
-				if err := column_rows.Scan(&columnIndex, &tableId, &dataType, &isNullable, &numericPrecision, &numericScale); err != nil {
-					return nil, ErrDuckDB.New(err)
-				}
-				data_type := mysqlDataType(newDuckType(dataType, decodedComment.Meta), uint8(numericPrecision.Int32), uint8(numericScale.Int32))
-				exprs = append(exprs, expression.NewGetFieldWithTable(columnIndex, tableId, data_type, t.db.name, t.name, columnName, isNullable))
-			}
+			exprs = append(exprs, expression.NewGetFieldWithTable(columnInfo.ColumnIndex, 0, columnInfo.DataType, t.db.name, t.name, columnInfo.ColumnName, columnInfo.IsNullable))
 		}
+
 		indexes = append(indexes, NewIndex(t.db.name, t.name, indexName, isUnique, DecodeComment(comment.String), exprs))
 	}
 
@@ -427,4 +434,28 @@ func (t *Table) PreciseMatch() bool {
 // Comment implements sql.CommentedTable.
 func (t *Table) Comment() string {
 	return t.comment.Text
+}
+
+func extractColumnInfo(rows *stdsql.Rows) (*ColumnInfo, error) {
+	var columnName, dataTypes string
+	var columnIndex, tableID int
+	var isNullable bool
+	var comment, columnDefault stdsql.NullString
+	var numericPrecision, numericScale stdsql.NullInt32
+
+	if err := rows.Scan(&columnName, &columnIndex, &tableID, &dataTypes, &isNullable, &columnDefault, &comment, &numericPrecision, &numericScale); err != nil {
+		return nil, err
+	}
+	decodedComment := DecodeComment(comment.String)
+	dataType := mysqlDataType(newDuckType(dataTypes, decodedComment.Meta), uint8(numericPrecision.Int32), uint8(numericScale.Int32))
+	columnInfo := &ColumnInfo{
+		ColumnName:    columnName,
+		ColumnIndex:   columnIndex,
+		TableID:       tableID,
+		DataType:      dataType,
+		IsNullable:    isNullable,
+		ColumnDefault: columnDefault,
+		Comment:       comment,
+	}
+	return columnInfo, nil
 }
