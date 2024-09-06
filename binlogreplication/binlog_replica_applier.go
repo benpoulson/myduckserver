@@ -794,8 +794,7 @@ func convertSqlTypesValue(ctx *sql.Context, engine *gms.Engine, value sqltypes.V
 			convertedValue, err = charset.Decode(t.CharacterSet(), value.ToString())
 		}
 		if !ok || errors.Is(err, charset.ErrUnsupported) {
-			// Unsupported character set, return the raw bytes as a string.
-			// It is possible because Go's string can hold arbitrary bytes.
+			// Unsupported character set, return the raw bytes as a string (Go's string can hold arbitrary bytes).
 			// TODO(fan): When written to DuckDB, the string is interpreted as UTF-8, which may cause issues.
 			convertedValue, _, err = column.Type.Convert(value.ToString())
 		}
