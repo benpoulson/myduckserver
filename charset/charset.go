@@ -27,7 +27,7 @@ func IsSupported(id sql.CharacterSetID) bool {
 
 func IsUTF8(id sql.CharacterSetID) bool {
 	switch id {
-	case sql.CharacterSet_ascii, sql.CharacterSet_utf8mb3, sql.CharacterSet_utf8mb4:
+	case sql.CharacterSet_Unspecified, sql.CharacterSet_ascii, sql.CharacterSet_utf8mb3, sql.CharacterSet_utf8mb4:
 		return true
 	}
 	return false
