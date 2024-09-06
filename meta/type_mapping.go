@@ -290,6 +290,6 @@ func mysqlDataType(duckType AnnotatedDuckType, numericPrecision uint8, numericSc
 	case "ENUM":
 		return types.MustCreateEnumType(duckType.mysql.Values, collation)
 	default:
-		panic(fmt.Sprintf("encountered unknown DuckDB type(%s). This is likely a bug - please check the duckdbDataType function for missing type mappings", duckType))
+		panic(fmt.Sprintf("encountered unknown DuckDB type(%v). This is likely a bug - please check the duckdbDataType function for missing type mappings", duckType))
 	}
 }
