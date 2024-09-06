@@ -19,7 +19,9 @@ import (
 	"io"
 	"strings"
 
+	"github.com/apecloud/myduckserver/charset"
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql/types"
 	"github.com/marcboeker/go-duckdb"
 	"github.com/shopspring/decimal"
 )
@@ -34,6 +36,8 @@ type SQLRowIter struct {
 	buffer   []any // pre-allocated buffer for scanning values
 	pointers []any // pointers to the buffer
 	decimals []int
+	nonUTF8  []int
+	charsets []sql.CharacterSetID
 }
 
 func NewSQLRowIter(rows *stdsql.Rows, schema sql.Schema) (*SQLRowIter, error) {
@@ -43,9 +47,20 @@ func NewSQLRowIter(rows *stdsql.Rows, schema sql.Schema) (*SQLRowIter, error) {
 	}
 
 	var decimals []int
-	for i, t := range columns {
-		if strings.HasPrefix(t.DatabaseTypeName(), "DECIMAL") {
+	for i, c := range columns {
+		if strings.HasPrefix(c.DatabaseTypeName(), "DECIMAL") {
 			decimals = append(decimals, i)
+		}
+	}
+
+	var (
+		nonUTF8  []int
+		charsets []sql.CharacterSetID
+	)
+	for i, c := range schema {
+		if t, ok := c.Type.(sql.StringType); ok && types.IsTextOnly(c.Type) && charset.IsSupportedNonUTF8(t.CharacterSet()) {
+			nonUTF8 = append(nonUTF8, i)
+			charsets = append(charsets, t.CharacterSet())
 		}
 	}
 
@@ -55,7 +70,7 @@ func NewSQLRowIter(rows *stdsql.Rows, schema sql.Schema) (*SQLRowIter, error) {
 	for i := range buf {
 		ptrs[i] = &buf[i]
 	}
-	return &SQLRowIter{rows, columns, schema, buf, ptrs, decimals}, nil
+	return &SQLRowIter{rows, columns, schema, buf, ptrs, decimals, nonUTF8, charsets}, nil
 }
 
 // Next retrieves the next row. It will return io.EOF if it's the last row.
@@ -75,14 +90,10 @@ func (iter *SQLRowIter) Next(ctx *sql.Context) (sql.Row, error) {
 	// Process decimal values
 	for _, idx := range iter.decimals {
 		switch v := iter.buffer[idx].(type) {
-		case nil:
-			// nothing to do
 		case duckdb.Decimal:
 			iter.buffer[idx] = decimal.NewFromBigInt(v.Value, -int32(v.Scale))
 		case string:
 			iter.buffer[idx], _ = decimal.NewFromString(v)
-		default:
-			// nothing to do
 		}
 	}
 
@@ -91,6 +102,14 @@ func (iter *SQLRowIter) Next(ctx *sql.Context) (sql.Row, error) {
 	if len(iter.columns) < width {
 		for i := len(iter.columns); i < width; i++ {
 			iter.buffer[i] = nil
+		}
+	}
+
+	// Encode UTF-8 strings into the desired charset
+	for i, idx := range iter.nonUTF8 {
+		switch v := iter.buffer[idx].(type) {
+		case string:
+			iter.buffer[idx], _ = charset.Encode(iter.charsets[i], v)
 		}
 	}
 
