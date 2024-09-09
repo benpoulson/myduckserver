@@ -21,6 +21,10 @@ func TestIsSupported(t *testing.T) {
 		{sql.CharacterSet_utf16, true},
 		{sql.CharacterSet_utf16le, true},
 		{sql.CharacterSet_utf32, true},
+		{sql.CharacterSet_gb2312, true},
+		{sql.CharacterSet_gbk, true},
+		{sql.CharacterSet_gb18030, true},
+		{sql.CharacterSet_big5, true},
 		{sql.CharacterSet_binary, false},
 	}
 
@@ -45,6 +49,10 @@ func TestIsUTF8(t *testing.T) {
 		{sql.CharacterSet_utf16, false},
 		{sql.CharacterSet_utf16le, false},
 		{sql.CharacterSet_utf32, false},
+		{sql.CharacterSet_gb2312, false},
+		{sql.CharacterSet_gbk, false},
+		{sql.CharacterSet_gb18030, false},
+		{sql.CharacterSet_big5, false},
 		{sql.CharacterSet_binary, false},
 	}
 
@@ -69,6 +77,10 @@ func TestIsSupportedNonUTF8(t *testing.T) {
 		{sql.CharacterSet_utf16, true},
 		{sql.CharacterSet_utf16le, true},
 		{sql.CharacterSet_utf32, true},
+		{sql.CharacterSet_gb2312, true},
+		{sql.CharacterSet_gbk, true},
+		{sql.CharacterSet_gb18030, true},
+		{sql.CharacterSet_big5, true},
 		{sql.CharacterSet_binary, false},
 	}
 
@@ -91,6 +103,10 @@ func TestDecode(t *testing.T) {
 		{sql.CharacterSet_ucs2, "\x00\x68\x00\x65\x00\x6c\x00\x6c\x00\x6f", "hello", nil},
 		{sql.CharacterSet_utf16le, "\x68\x00\x65\x00\x6c\x00\x6c\x00\x6f\x00", "hello", nil},
 		{sql.CharacterSet_utf32, "\x00\x00\x00\x68\x00\x00\x00\x65\x00\x00\x00\x6c\x00\x00\x00\x6c\x00\x00\x00\x6f", "hello", nil},
+		{sql.CharacterSet_gb2312, "\xc4\xe3\xba\xc3", "你好", nil},
+		{sql.CharacterSet_gbk, "\xc4\xe3\xba\xc3", "你好", nil},
+		{sql.CharacterSet_gb18030, "\xc4\xe3\xba\xc3", "你好", nil},
+		{sql.CharacterSet_big5, "\xa7\x41\xa6\x6e", "你好", nil},
 		{sql.CharacterSet_binary, "hello", "hello", ErrUnsupported},
 	}
 
@@ -115,6 +131,10 @@ func TestEncode(t *testing.T) {
 		{sql.CharacterSet_ucs2, "hello", "\x00\x68\x00\x65\x00\x6c\x00\x6c\x00\x6f", nil},
 		{sql.CharacterSet_utf16le, "hello", "\x68\x00\x65\x00\x6c\x00\x6c\x00\x6f\x00", nil},
 		{sql.CharacterSet_utf32, "hello", "\x00\x00\x00\x68\x00\x00\x00\x65\x00\x00\x00\x6c\x00\x00\x00\x6c\x00\x00\x00\x6f", nil},
+		{sql.CharacterSet_gb2312, "你好", "\xc4\xe3\xba\xc3", nil},
+		{sql.CharacterSet_gbk, "你好", "\xc4\xe3\xba\xc3", nil},
+		{sql.CharacterSet_gb18030, "你好", "\xc4\xe3\xba\xc3", nil},
+		{sql.CharacterSet_big5, "你好", "\xa7\x41\xa6\x6e", nil},
 		{sql.CharacterSet_binary, "hello", "hello", ErrUnsupported},
 	}
 

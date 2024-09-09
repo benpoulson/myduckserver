@@ -6,6 +6,8 @@ import (
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"golang.org/x/text/encoding/charmap"
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/encoding/traditionalchinese"
 	"golang.org/x/text/encoding/unicode"
 	"golang.org/x/text/encoding/unicode/utf32"
 )
@@ -19,7 +21,9 @@ func IsSupported(id sql.CharacterSetID) bool {
 		sql.CharacterSet_latin1,
 		sql.CharacterSet_utf8mb3, sql.CharacterSet_utf8mb4,
 		sql.CharacterSet_ucs2, sql.CharacterSet_utf16, sql.CharacterSet_utf16le,
-		sql.CharacterSet_utf32:
+		sql.CharacterSet_utf32,
+		sql.CharacterSet_gb2312, sql.CharacterSet_gbk, sql.CharacterSet_gb18030,
+		sql.CharacterSet_big5:
 		return true
 	}
 	return false
@@ -45,6 +49,7 @@ func Decode(id sql.CharacterSetID, encoded string) (string, error) {
 		// https://dev.mysql.com/doc/refman/8.4/en/charset-we-sets.html
 		// > MySQL's latin1 is the same as the Windows cp1252 character set.
 		return charmap.Windows1252.NewDecoder().String(encoded)
+
 	case sql.CharacterSet_ucs2, sql.CharacterSet_utf16:
 		// https://dev.mysql.com/doc/refman/8.4/en/charset-unicode-utf16.html
 		return unicode.UTF16(unicode.BigEndian, unicode.IgnoreBOM).NewDecoder().String(encoded)
@@ -54,6 +59,14 @@ func Decode(id sql.CharacterSetID, encoded string) (string, error) {
 	case sql.CharacterSet_utf32:
 		// https://dev.mysql.com/doc/refman/8.4/en/charset-unicode-utf32.html
 		return utf32.UTF32(utf32.BigEndian, utf32.IgnoreBOM).NewDecoder().String(encoded)
+
+	// https://dev.mysql.com/doc/refman/8.4/en/faqs-cjk.html
+	case sql.CharacterSet_gb2312, sql.CharacterSet_gbk:
+		return simplifiedchinese.GBK.NewDecoder().String(encoded)
+	case sql.CharacterSet_gb18030:
+		return simplifiedchinese.GB18030.NewDecoder().String(encoded)
+	case sql.CharacterSet_big5:
+		return traditionalchinese.Big5.NewDecoder().String(encoded)
 	}
 	return encoded, fmt.Errorf("%s: %w", id, ErrUnsupported)
 }
@@ -70,6 +83,12 @@ func Encode(id sql.CharacterSetID, utf8 string) (string, error) {
 		return unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM).NewEncoder().String(utf8)
 	case sql.CharacterSet_utf32:
 		return utf32.UTF32(utf32.BigEndian, utf32.IgnoreBOM).NewEncoder().String(utf8)
+	case sql.CharacterSet_gb2312, sql.CharacterSet_gbk:
+		return simplifiedchinese.GBK.NewEncoder().String(utf8)
+	case sql.CharacterSet_gb18030:
+		return simplifiedchinese.GB18030.NewEncoder().String(utf8)
+	case sql.CharacterSet_big5:
+		return traditionalchinese.Big5.NewEncoder().String(utf8)
 	}
 	return utf8, fmt.Errorf("%s: %w", id, ErrUnsupported)
 }
