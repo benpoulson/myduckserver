@@ -34,7 +34,20 @@ clean:
 run: build
 	./$(BINARY_NAME)
 
+
 # Test target
-.PHONY: test
+.PHONY: test-full test cover
+
+TEST_CMD = go test -cover -coverprofile cover.out 
+SHOW_TOTAL_COVERAGE = go tool cover -func=cover.out | grep total | awk '{print "Total Coverage: " $$3 " (run '\''make cover'\'' for details)"}'
+
+test-full:
+	$(TEST_CMD) ./...
+	@$(SHOW_TOTAL_COVERAGE)
+
 test:
-	go test -cover ./...
+	$(TEST_CMD) $(shell go list ./... | grep -v './binlogreplication' | grep -v './transpiler')
+	@$(SHOW_TOTAL_COVERAGE)
+
+cover:
+	go tool cover -html=cover.out

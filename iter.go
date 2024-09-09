@@ -30,14 +30,15 @@ var _ sql.RowIter = (*SQLRowIter)(nil)
 
 // SQLRowIter wraps a standard sql.Rows as a RowIter.
 type SQLRowIter struct {
-	rows     *stdsql.Rows
-	columns  []*stdsql.ColumnType
-	schema   sql.Schema
-	buffer   []any // pre-allocated buffer for scanning values
-	pointers []any // pointers to the buffer
-	decimals []int
-	nonUTF8  []int
-	charsets []sql.CharacterSetID
+	rows      *stdsql.Rows
+	columns   []*stdsql.ColumnType
+	schema    sql.Schema
+	buffer    []any // pre-allocated buffer for scanning values
+	pointers  []any // pointers to the buffer
+	decimals  []int
+	intervals []int
+  nonUTF8   []int
+	charsets  []sql.CharacterSetID
 }
 
 func NewSQLRowIter(rows *stdsql.Rows, schema sql.Schema) (*SQLRowIter, error) {
@@ -50,6 +51,13 @@ func NewSQLRowIter(rows *stdsql.Rows, schema sql.Schema) (*SQLRowIter, error) {
 	for i, c := range columns {
 		if strings.HasPrefix(c.DatabaseTypeName(), "DECIMAL") {
 			decimals = append(decimals, i)
+		}
+	}
+
+	var intervals []int
+	for i, t := range columns {
+		if strings.HasPrefix(t.DatabaseTypeName(), "INTERVAL") {
+			intervals = append(intervals, i)
 		}
 	}
 
@@ -70,7 +78,8 @@ func NewSQLRowIter(rows *stdsql.Rows, schema sql.Schema) (*SQLRowIter, error) {
 	for i := range buf {
 		ptrs[i] = &buf[i]
 	}
-	return &SQLRowIter{rows, columns, schema, buf, ptrs, decimals, nonUTF8, charsets}, nil
+
+	return &SQLRowIter{rows, columns, schema, buf, ptrs, decimals, intervals, nonUTF8, charsets}, nil
 }
 
 // Next retrieves the next row. It will return io.EOF if it's the last row.
@@ -94,6 +103,15 @@ func (iter *SQLRowIter) Next(ctx *sql.Context) (sql.Row, error) {
 			iter.buffer[idx] = decimal.NewFromBigInt(v.Value, -int32(v.Scale))
 		case string:
 			iter.buffer[idx], _ = decimal.NewFromString(v)
+		}
+	}
+
+	// Process interval values
+	for _, idx := range iter.intervals {
+		t := types.TimespanType_{}
+		switch v := iter.buffer[idx].(type) {
+		case duckdb.Interval:
+			iter.buffer[idx] = t.MicrosecondsToTimespan(v.Micros + int64(v.Days)*24*60*60*1000000) // ignore the month part, which does not appear in MySQL
 		}
 	}
 
