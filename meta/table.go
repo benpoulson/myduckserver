@@ -88,11 +88,11 @@ func (t *Table) schema() sql.Schema {
 
 	var schema sql.Schema
 
-	columnsInfo, err := queryColumnsInfo(t.db.storage, t.db.catalogName, t.db.name, t.name)
+	columnsInfoMap, err := queryColumnsInfo(t.db.storage, t.db.catalogName, t.db.name, t.name)
 	if err != nil {
 		panic(ErrDuckDB.New(err))
 	}
-	for _, columnInfo := range columnsInfo {
+	for _, columnInfo := range columnsInfoMap {
 		defaultValue := (*sql.ColumnDefaultValue)(nil)
 		if columnInfo.ColumnDefault.Valid {
 			defaultValue = sql.NewUnresolvedColumnDefaultValue(columnInfo.ColumnDefault.String)
@@ -366,7 +366,7 @@ func (t *Table) GetIndexes(ctx *sql.Context) ([]sql.Index, error) {
 
 	indexes := []sql.Index{}
 
-	columnsInfo, err := queryColumnsInfo(t.db.storage, t.db.catalogName, t.db.name, t.name)
+	columnsInfoMap, err := queryColumnsInfo(t.db.storage, t.db.catalogName, t.db.name, t.name)
 	if err != nil {
 		return nil, ErrDuckDB.New(err)
 	}
@@ -385,13 +385,12 @@ func (t *Table) GetIndexes(ctx *sql.Context) ([]sql.Index, error) {
 		_, indexName := DecodeIndexName(encodedIndexName)
 		columnNames := DecodeCreateindex(createIndexSQL)
 
-		for _, columnsInfo := range columnsInfo {
-			for _, columnName := range columnNames {
-				if columnsInfo.ColumnName == columnName {
-					exprs = append(exprs, expression.NewGetFieldWithTable(columnsInfo.ColumnIndex, 0, columnsInfo.DataType, t.db.name, t.name, columnsInfo.ColumnName, columnsInfo.IsNullable))
-				}
+		for _, columnName := range columnNames {
+			if columnInfo, exists := columnsInfoMap[columnName]; exists {
+				exprs = append(exprs, expression.NewGetFieldWithTable(columnInfo.ColumnIndex, 0, columnInfo.DataType, t.db.name, t.name, columnInfo.ColumnName, columnInfo.IsNullable))
 			}
 		}
+
 		indexes = append(indexes, NewIndex(t.db.name, t.name, indexName, isUnique, DecodeComment[any](comment.String), exprs))
 	}
 
@@ -417,7 +416,7 @@ func (t *Table) Comment() string {
 	return t.comment.Text
 }
 
-func queryColumnsInfo(db *stdsql.DB, catalogName, schemaName, tableName string) ([]*ColumnInfo, error) {
+func queryColumnsInfo(db *stdsql.DB, catalogName, schemaName, tableName string) (map[string]*ColumnInfo, error) {
 
 	rows, err := db.Query(`
 		SELECT column_name, column_index, data_type, is_nullable, column_default, comment, numeric_precision, numeric_scale
@@ -425,11 +424,11 @@ func queryColumnsInfo(db *stdsql.DB, catalogName, schemaName, tableName string) 
 		WHERE database_name = ? AND schema_name = ? AND table_name = ?
 	`, catalogName, schemaName, tableName)
 	if err != nil {
-		return nil, ErrDuckDB.New(err)
+		return nil, err
 	}
 	defer rows.Close()
 
-	var columnsInfo []*ColumnInfo
+	columnsInfoMap := make(map[string]*ColumnInfo)
 
 	for rows.Next() {
 		var columnName, dataTypes string
@@ -453,14 +452,14 @@ func queryColumnsInfo(db *stdsql.DB, catalogName, schemaName, tableName string) 
 			ColumnDefault: columnDefault,
 			Comment:       comment,
 		}
-		columnsInfo = append(columnsInfo, columnInfo)
+		columnsInfoMap[columnName] = columnInfo
 	}
 
 	if err = rows.Err(); err != nil {
-		return nil, ErrDuckDB.New(err)
+		return nil, err
 	}
 
-	return columnsInfo, nil
+	return columnsInfoMap, nil
 }
 
 func (t *IndexedTable) LookupPartitions(ctx *sql.Context, lookup sql.IndexLookup) (sql.PartitionIter, error) {

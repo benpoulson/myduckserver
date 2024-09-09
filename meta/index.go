@@ -14,8 +14,6 @@ type Index struct {
 
 var _ sql.Index = (*Index)(nil)
 
-// TODO: DuckDB doesn't have a convenient way to get the expressions from an index
-// so we need to implement our own. Storing it in the index comment is a good idea.
 func NewIndex(dbName, tableName, name string, unique bool, comment *Comment[any], exprs []sql.Expression) *Index {
 	return &Index{
 		DbName:     dbName,
