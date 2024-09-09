@@ -88,11 +88,11 @@ func (t *Table) schema() sql.Schema {
 
 	var schema sql.Schema
 
-	columnsInfoMap, err := queryColumnsInfo(t.db.storage, t.db.catalogName, t.db.name, t.name)
+	columnsInfo, err := queryColumnsInfo(t.db.storage, t.db.catalogName, t.db.name, t.name)
 	if err != nil {
 		panic(ErrDuckDB.New(err))
 	}
-	for _, columnInfo := range columnsInfoMap {
+	for _, columnInfo := range columnsInfo {
 		defaultValue := (*sql.ColumnDefaultValue)(nil)
 		if columnInfo.ColumnDefault.Valid {
 			defaultValue = sql.NewUnresolvedColumnDefaultValue(columnInfo.ColumnDefault.String)
@@ -366,7 +366,12 @@ func (t *Table) GetIndexes(ctx *sql.Context) ([]sql.Index, error) {
 
 	indexes := []sql.Index{}
 
-	columnsInfoMap, err := queryColumnsInfo(t.db.storage, t.db.catalogName, t.db.name, t.name)
+	columnsInfo, err := queryColumnsInfo(t.db.storage, t.db.catalogName, t.db.name, t.name)
+	columnsInfoMap := make(map[string]*ColumnInfo)
+	for _, columnInfo := range columnsInfo {
+		columnsInfoMap[columnInfo.ColumnName] = columnInfo
+	}
+
 	if err != nil {
 		return nil, ErrDuckDB.New(err)
 	}
@@ -416,7 +421,7 @@ func (t *Table) Comment() string {
 	return t.comment.Text
 }
 
-func queryColumnsInfo(db *stdsql.DB, catalogName, schemaName, tableName string) (map[string]*ColumnInfo, error) {
+func queryColumnsInfo(db *stdsql.DB, catalogName, schemaName, tableName string) ([]*ColumnInfo, error) {
 
 	rows, err := db.Query(`
 		SELECT column_name, column_index, data_type, is_nullable, column_default, comment, numeric_precision, numeric_scale
@@ -428,7 +433,7 @@ func queryColumnsInfo(db *stdsql.DB, catalogName, schemaName, tableName string) 
 	}
 	defer rows.Close()
 
-	columnsInfoMap := make(map[string]*ColumnInfo)
+	var columnsInfo []*ColumnInfo
 
 	for rows.Next() {
 		var columnName, dataTypes string
@@ -452,14 +457,14 @@ func queryColumnsInfo(db *stdsql.DB, catalogName, schemaName, tableName string) 
 			ColumnDefault: columnDefault,
 			Comment:       comment,
 		}
-		columnsInfoMap[columnName] = columnInfo
+		columnsInfo = append(columnsInfo, columnInfo)
 	}
 
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
 
-	return columnsInfoMap, nil
+	return columnsInfo, nil
 }
 
 func (t *IndexedTable) LookupPartitions(ctx *sql.Context, lookup sql.IndexLookup) (sql.PartitionIter, error) {
