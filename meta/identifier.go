@@ -42,7 +42,7 @@ func DecodeIndexName(encodedName string) (string, string) {
 }
 
 // DecodeCreateindex extracts column names from a SQL string, Only consider single-column indexes or multi-column indexes
-// Todo Using sqlparser to parse columns name, now identifiers(index name, table name, column name) cannot include parentheses.
+// TODO using sqlparser to parse columns name, now identifiers(index name, table name, column name) cannot include parentheses.
 // such as CREATE INDEX "idx((())hello" ON db.T((t.a)); will cause an error
 func DecodeCreateindex(createIndexSQL string) []string {
 	leftParen := strings.Index(createIndexSQL, "(")
