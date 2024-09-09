@@ -37,7 +37,7 @@ type SQLRowIter struct {
 	pointers  []any // pointers to the buffer
 	decimals  []int
 	intervals []int
-  nonUTF8   []int
+	nonUTF8   []int
 	charsets  []sql.CharacterSetID
 }
 
