@@ -382,6 +382,7 @@ var (
 		"SHOW_COLUMNS_FROM_keyless",
 		"SHOW_FULL_COLUMNS_FROM_keyless",
 		"select * from xy where x in (select 1 having false);",
+		"select_now()_=_sysdate(),_sleep(0.1),_now(6)_<_sysdate(6);",
 	}
 
 	// cases lead to panics
