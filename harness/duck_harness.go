@@ -26,7 +26,7 @@ import (
 	"testing"
 
 	"github.com/apecloud/myduckserver/backend"
-	"github.com/apecloud/myduckserver/meta"
+	"github.com/apecloud/myduckserver/catalog"
 	"github.com/dolthub/vitess/go/mysql"
 
 	sqle "github.com/dolthub/go-mysql-server"
@@ -295,7 +295,7 @@ func NewEngine(t *testing.T, harness enginetest.Harness, dbProvider sql.Database
 	e := enginetest.NewEngineWithProvider(t, harness, dbProvider)
 	e.Analyzer.Catalog.StatsProvider = statsProvider
 
-	provider := dbProvider.(*meta.DbProvider)
+	provider := dbProvider.(*catalog.DatabaseProvider)
 	builder := backend.NewDuckBuilder(e.Analyzer.ExecBuilder, provider.Storage(), provider.CatalogName())
 	e.Analyzer.ExecBuilder = builder
 
@@ -376,18 +376,18 @@ func (m *DuckHarness) getProvider() sql.DatabaseProvider {
 	defer m.mu.Unlock()
 
 	if m.provider == nil {
-		m.provider = m.NewDatabaseProvider().(*meta.DbProvider)
+		m.provider = m.NewDatabaseProvider().(*catalog.DatabaseProvider)
 	}
 
 	return m.provider
 }
 
 func (m *DuckHarness) NewDatabaseProvider() sql.MutableDatabaseProvider {
-	return meta.NewInMemoryDBProvider()
+	return catalog.NewInMemoryDBProvider()
 }
 
-func (m *DuckHarness) Provider() *meta.DbProvider {
-	return m.getProvider().(*meta.DbProvider)
+func (m *DuckHarness) Provider() *catalog.DatabaseProvider {
+	return m.getProvider().(*catalog.DatabaseProvider)
 }
 
 func (m *DuckHarness) ValidateEngine(ctx *sql.Context, e *sqle.Engine) error {

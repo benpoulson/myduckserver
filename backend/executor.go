@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/apecloud/myduckserver/meta"
+	"github.com/apecloud/myduckserver/catalog"
 	"github.com/apecloud/myduckserver/transpiler"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
@@ -67,8 +67,8 @@ func (b *DuckBuilder) GetConn(ctx context.Context, id uint32, schemaName string)
 			logrus.WithError(err).Error("Failed to get current schema")
 			return nil, err
 		} else if currentSchema != schemaName {
-			if _, err := conn.ExecContext(ctx, "USE "+meta.FullSchemaName(b.catalogName, schemaName)); err != nil {
-				if meta.IsDuckDBSetSchemaNotFoundError(err) {
+			if _, err := conn.ExecContext(ctx, "USE "+catalog.FullSchemaName(b.catalogName, schemaName)); err != nil {
+				if catalog.IsDuckDBSetSchemaNotFoundError(err) {
 					return nil, sql.ErrDatabaseNotFound.New(schemaName)
 				}
 				logrus.WithField("schema", schemaName).WithError(err).Error("Failed to switch schema")
@@ -122,9 +122,9 @@ func (b *DuckBuilder) Build(ctx *sql.Context, root sql.Node, r sql.Row) (sql.Row
 
 	switch node := n.(type) {
 	case *plan.Use:
-		useStmt := "USE " + meta.FullSchemaName(b.catalogName, node.Database().Name())
+		useStmt := "USE " + catalog.FullSchemaName(b.catalogName, node.Database().Name())
 		if _, err := conn.ExecContext(ctx.Context, useStmt); err != nil {
-			if meta.IsDuckDBSetSchemaNotFoundError(err) {
+			if catalog.IsDuckDBSetSchemaNotFoundError(err) {
 				return nil, sql.ErrDatabaseNotFound.New(node.Database().Name())
 			}
 			return nil, err

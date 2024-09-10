@@ -20,7 +20,7 @@ import (
 	"path/filepath"
 
 	"github.com/apecloud/myduckserver/backend"
-	"github.com/apecloud/myduckserver/meta"
+	"github.com/apecloud/myduckserver/catalog"
 	"github.com/apecloud/myduckserver/transpiler"
 	sqle "github.com/dolthub/go-mysql-server"
 	"github.com/dolthub/go-mysql-server/server"
@@ -63,7 +63,7 @@ func main() {
 
 	ensureSQLTranslate()
 
-	provider, err := meta.NewDBProvider(dataDirectory, dbFileName)
+	provider, err := catalog.NewDBProvider(dataDirectory, dbFileName)
 	if err != nil {
 		logrus.Fatalln("Failed to open the database:", err)
 	}
