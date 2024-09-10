@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package main
+package backend
 
 import (
 	"context"
@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/apecloud/myduckserver/meta"
+	"github.com/apecloud/myduckserver/transpiler"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/plan"
@@ -108,7 +109,7 @@ func (b *DuckBuilder) Build(ctx *sql.Context, root sql.Node, r sql.Row) (sql.Row
 	}
 
 	// Fallback to the base builder if the plan contains system/user variables or is not a pure data query.
-	if containsVariable(n) || !isPureDataQuery(n) {
+	if containsVariable(n) || !IsPureDataQuery(n) {
 		return b.base.Build(ctx, root, r)
 	}
 
@@ -182,7 +183,7 @@ func (b *DuckBuilder) executeQuery(ctx *sql.Context, n sql.Node, conn *stdsql.Co
 	case *plan.ShowTables:
 		duckSQL = ctx.Query()
 	default:
-		duckSQL, err = translate(n, ctx.Query())
+		duckSQL, err = transpiler.Translate(n, ctx.Query())
 	}
 	if err != nil {
 		return nil, err
@@ -204,7 +205,7 @@ func (b *DuckBuilder) executeQuery(ctx *sql.Context, n sql.Node, conn *stdsql.Co
 
 func (b *DuckBuilder) executeDML(ctx *sql.Context, n sql.Node, conn *stdsql.Conn) (sql.RowIter, error) {
 	// Translate the MySQL query to a DuckDB query
-	duckSQL, err := translate(n, ctx.Query())
+	duckSQL, err := transpiler.Translate(n, ctx.Query())
 	if err != nil {
 		return nil, err
 	}
@@ -250,13 +251,13 @@ func containsVariable(n sql.Node) bool {
 	return found
 }
 
-// isPureDataQuery inspects if the plan is a pure data query,
+// IsPureDataQuery inspects if the plan is a pure data query,
 // i.e., it operates on (>=1) data tables and does not touch any system tables.
 // The following examples are NOT pure data queries:
 // - `SELECT * FROM mysql.*`
 // - `TRUNCATE mysql.user`
 // - `SELECT DATABASE()`
-func isPureDataQuery(n sql.Node) bool {
+func IsPureDataQuery(n sql.Node) bool {
 	c := &tableNodeCollector{}
 	transform.Walk(c, n)
 	if len(c.tables) == 0 {

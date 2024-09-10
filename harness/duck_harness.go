@@ -14,7 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package harness
 
 import (
 	"context"
@@ -25,6 +25,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/apecloud/myduckserver/backend"
 	"github.com/apecloud/myduckserver/meta"
 	"github.com/dolthub/vitess/go/mysql"
 
@@ -36,7 +37,7 @@ import (
 	"github.com/dolthub/go-mysql-server/sql"
 )
 
-const testNumPartitions = 5
+const TestNumPartitions = 5
 
 type IndexDriverInitializer func([]sql.Database) sql.IndexDriver
 
@@ -95,7 +96,7 @@ func NewDuckHarness(name string, parallelism int, numTablePartitions int, useNat
 }
 
 func NewDefaultDuckHarness() *DuckHarness {
-	return NewDuckHarness("default", 1, testNumPartitions, true, nil).SetupScriptsToSkip(
+	return NewDuckHarness("default", 1, TestNumPartitions, true, nil).SetupScriptsToSkip(
 		setup.Fk_tblData,     // Skip foreign key setup (not supported)
 		setup.TypestableData, // Skip enum/set type setup (not supported)
 	)
@@ -295,7 +296,7 @@ func NewEngine(t *testing.T, harness enginetest.Harness, dbProvider sql.Database
 	e.Analyzer.Catalog.StatsProvider = statsProvider
 
 	provider := dbProvider.(*meta.DbProvider)
-	builder := NewDuckBuilder(e.Analyzer.ExecBuilder, provider.Storage(), provider.CatalogName())
+	builder := backend.NewDuckBuilder(e.Analyzer.ExecBuilder, provider.Storage(), provider.CatalogName())
 	e.Analyzer.ExecBuilder = builder
 
 	ctx := enginetest.NewContext(harness)
