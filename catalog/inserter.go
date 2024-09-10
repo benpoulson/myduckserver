@@ -1,4 +1,4 @@
-package meta
+package catalog
 
 import (
 	stdsql "database/sql"
@@ -14,7 +14,7 @@ type rowInserter struct {
 var _ sql.RowInserter = &rowInserter{}
 
 func (ri *rowInserter) StatementBegin(ctx *sql.Context) {
-	ctx.ID()
+
 }
 
 func (ri *rowInserter) DiscardChanges(ctx *sql.Context, errorEncountered error) error {
