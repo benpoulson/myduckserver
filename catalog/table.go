@@ -84,7 +84,6 @@ func (t *Table) Schema() sql.Schema {
 }
 
 func (t *Table) schema() (sql.Schema, []int) {
-
 	var schema sql.Schema
 
 	columnsInfo, err := queryColumnsInfo(t.db.storage, t.db.catalogName, t.db.name, t.name)
@@ -241,7 +240,7 @@ func (t *Table) ModifyColumn(ctx *sql.Context, columnName string, column *sql.Co
 	}
 
 	// alter comment
-	comment := NewCommentWithMeta[MySQLType](column.Comment, typ.mysql)
+	comment := NewCommentWithMeta(column.Comment, typ.mysql)
 	sqls = append(sqls, fmt.Sprintf(`COMMENT ON COLUMN %s IS '%s'`, FullColumnName(t.db.catalogName, t.db.name, t.name, column.Name), comment.Encode()))
 
 	joinedSQL := strings.Join(sqls, "; ")
@@ -262,7 +261,12 @@ func (t *Table) Updater(ctx *sql.Context) sql.RowUpdater {
 
 // Inserter implements sql.InsertableTable.
 func (t *Table) Inserter(*sql.Context) sql.RowInserter {
-	return nil
+	schema, _ := t.schema()
+	return &rowInserter{
+		db:     t.db.Name(),
+		table:  t.name,
+		schema: schema,
+	}
 }
 
 // Deleter implements sql.DeletableTable.

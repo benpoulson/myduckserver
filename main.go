@@ -84,7 +84,7 @@ func main() {
 		Protocol: "tcp",
 		Address:  fmt.Sprintf("%s:%d", address, port),
 	}
-	s, err := server.NewServerWithHandler(config, engine, backend.NewSessionBuilder(provider), nil, backend.WrapHandler(builder))
+	s, err := server.NewServerWithHandler(config, engine, backend.NewSessionBuilder(provider, builder), nil, backend.WrapHandler(builder))
 	if err != nil {
 		panic(err)
 	}

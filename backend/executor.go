@@ -47,9 +47,8 @@ func NewDuckBuilder(base sql.NodeExecBuilder, db *stdsql.DB, catalogName string)
 }
 
 func (b *DuckBuilder) GetConn(ctx context.Context, id uint32, schemaName string) (*stdsql.Conn, error) {
+	var conn *stdsql.Conn
 	entry, ok := b.conns.Load(id)
-	conn := (*stdsql.Conn)(nil)
-
 	if !ok {
 		c, err := b.db.Conn(ctx)
 		if err != nil {
@@ -104,8 +103,19 @@ func (b *DuckBuilder) Build(ctx *sql.Context, root sql.Node, r sql.Row) (sql.Row
 		*plan.CreateTable, *plan.AddColumn, *plan.RenameColumn, *plan.DropColumn, *plan.ModifyColumn,
 		*plan.CreateIndex, *plan.DropIndex, *plan.AlterIndex, *plan.ShowIndexes,
 		*plan.ShowTables, *plan.ShowCreateTable,
-		*plan.ShowBinlogs, *plan.ShowBinlogStatus, *plan.ShowWarnings:
+		*plan.ShowBinlogs, *plan.ShowBinlogStatus, *plan.ShowWarnings,
+		*plan.StartTransaction, *plan.Commit, *plan.Rollback,
+		*plan.Set, *plan.ShowVariables,
+		*plan.LoadData:
 		return b.base.Build(ctx, root, r)
+	case *plan.InsertInto:
+		src := n.(*plan.InsertInto).Source
+		if proj, ok := src.(*plan.Project); ok {
+			src = proj.Child
+		}
+		if _, ok := src.(*plan.LoadData); ok {
+			return b.base.Build(ctx, root, r)
+		}
 	}
 
 	// Fallback to the base builder if the plan contains system/user variables or is not a pure data query.
@@ -113,9 +123,7 @@ func (b *DuckBuilder) Build(ctx *sql.Context, root sql.Node, r sql.Row) (sql.Row
 		return b.base.Build(ctx, root, r)
 	}
 
-	schemaName := ctx.Session.GetCurrentDatabase()
-
-	conn, err := b.GetConn(ctx.Context, ctx.ID(), schemaName)
+	conn, err := b.GetConn(ctx, ctx.ID(), ctx.GetCurrentDatabase())
 	if err != nil {
 		return nil, err
 	}
@@ -129,20 +137,6 @@ func (b *DuckBuilder) Build(ctx *sql.Context, root sql.Node, r sql.Row) (sql.Row
 			}
 			return nil, err
 		}
-		return b.base.Build(ctx, root, r)
-	case *plan.StartTransaction:
-		if _, err := conn.ExecContext(ctx.Context, "BEGIN TRANSACTION"); err != nil {
-			return nil, err
-		}
-		return b.base.Build(ctx, root, r)
-	case *plan.Commit:
-		if _, err := conn.ExecContext(ctx.Context, "COMMIT"); err != nil {
-			return nil, err
-		}
-		return b.base.Build(ctx, root, r)
-	case *plan.Set:
-		return b.base.Build(ctx, root, r)
-	case *plan.ShowVariables:
 		return b.base.Build(ctx, root, r)
 	// SubqueryAlias is for select * from view
 	case *plan.ResolvedTable, *plan.SubqueryAlias, *plan.TableAlias:
