@@ -187,13 +187,18 @@ func (sess Session) GetPersistedValue(k string) (interface{}, error) {
 	}
 }
 
-// GetConn implements adapter.ConnHolder.
+// GetConn implements adapter.ConnectionHolder.
 func (sess Session) GetConn(ctx context.Context) (*stdsql.Conn, error) {
-	return sess.pool.GetConn(ctx, sess.ID(), sess.GetCurrentDatabase())
+	return sess.pool.GetConnForSchema(ctx, sess.ID(), sess.GetCurrentDatabase())
+}
+
+// GetCatalogConn implements adapter.ConnectionHolder.
+func (sess Session) GetCatalogConn(ctx context.Context) (*stdsql.Conn, error) {
+	return sess.pool.GetConn(ctx, sess.ID())
 }
 
 func (sess Session) ExecContext(ctx context.Context, query string, args ...interface{}) (stdsql.Result, error) {
-	conn, err := sess.GetConn(ctx)
+	conn, err := sess.GetCatalogConn(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +206,7 @@ func (sess Session) ExecContext(ctx context.Context, query string, args ...inter
 }
 
 func (sess Session) QueryRow(ctx context.Context, query string, args ...interface{}) *stdsql.Row {
-	conn, err := sess.GetConn(ctx)
+	conn, err := sess.GetCatalogConn(ctx)
 	if err != nil {
 		return nil
 	}

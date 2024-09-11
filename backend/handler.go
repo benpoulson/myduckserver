@@ -33,7 +33,7 @@ func (h *MyHandler) ConnectionClosed(c *mysql.Conn) {
 }
 
 func (h *MyHandler) ComInitDB(c *mysql.Conn, schemaName string) error {
-	_, err := h.pool.GetConn(context.Background(), c.ConnectionID, schemaName)
+	_, err := h.pool.GetConnForSchema(context.Background(), c.ConnectionID, schemaName)
 	if err != nil {
 		return err
 	}

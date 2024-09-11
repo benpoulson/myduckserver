@@ -36,7 +36,7 @@ func NewConnectionPool(catalog string, db *stdsql.DB) *ConnectionPool {
 	}
 }
 
-func (p *ConnectionPool) GetConn(ctx context.Context, id uint32, schemaName string) (*stdsql.Conn, error) {
+func (p *ConnectionPool) GetConn(ctx context.Context, id uint32) (*stdsql.Conn, error) {
 	var conn *stdsql.Conn
 	entry, ok := p.conns.Load(id)
 	if !ok {
@@ -49,14 +49,22 @@ func (p *ConnectionPool) GetConn(ctx context.Context, id uint32, schemaName stri
 	} else {
 		conn = entry.(*stdsql.Conn)
 	}
+	return conn, nil
+}
+
+func (p *ConnectionPool) GetConnForSchema(ctx context.Context, id uint32, schemaName string) (*stdsql.Conn, error) {
+	conn, err := p.GetConn(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 
 	if schemaName != "" {
 		var currentSchema string
-		if err := conn.QueryRowContext(ctx, "SELECT CURRENT_SCHEMA()").Scan(&currentSchema); err != nil {
+		if err := conn.QueryRowContext(context.Background(), "SELECT CURRENT_SCHEMA()").Scan(&currentSchema); err != nil {
 			logrus.WithError(err).Error("Failed to get current schema")
 			return nil, err
 		} else if currentSchema != schemaName {
-			if _, err := conn.ExecContext(ctx, "USE "+catalog.FullSchemaName(p.catalog, schemaName)); err != nil {
+			if _, err := conn.ExecContext(context.Background(), "USE "+catalog.FullSchemaName(p.catalog, schemaName)); err != nil {
 				if catalog.IsDuckDBSetSchemaNotFoundError(err) {
 					return nil, sql.ErrDatabaseNotFound.New(schemaName)
 				}
@@ -65,6 +73,7 @@ func (p *ConnectionPool) GetConn(ctx context.Context, id uint32, schemaName stri
 			}
 		}
 	}
+
 	return conn, nil
 }
 

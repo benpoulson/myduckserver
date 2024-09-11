@@ -86,7 +86,7 @@ func (b *DuckBuilder) Build(ctx *sql.Context, root sql.Node, r sql.Row) (sql.Row
 		return b.base.Build(ctx, root, r)
 	}
 
-	conn, err := b.pool.GetConn(ctx, ctx.ID(), ctx.GetCurrentDatabase())
+	conn, err := b.pool.GetConnForSchema(ctx, ctx.ID(), ctx.GetCurrentDatabase())
 	if err != nil {
 		return nil, err
 	}

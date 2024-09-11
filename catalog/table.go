@@ -142,7 +142,7 @@ func (t *Table) PrimaryKeySchema() sql.PrimaryKeySchema {
 }
 
 func getPrimaryKeyOrdinals(ctx *sql.Context, catalogName, dbName, tableName string) []int {
-	rows, err := adapter.QueryContext(ctx, `
+	rows, err := adapter.QueryCatalogContext(ctx, `
 		SELECT constraint_column_indexes FROM duckdb_constraints() WHERE database_name = ? AND schema_name = ? AND table_name = ? AND constraint_type = 'PRIMARY KEY' LIMIT 1
 	`, catalogName, dbName, tableName)
 	if err != nil {
@@ -364,7 +364,7 @@ func (t *Table) GetIndexes(ctx *sql.Context) ([]sql.Index, error) {
 	defer t.mu.RUnlock()
 
 	// Query to get the indexes for the table
-	rows, err := adapter.QueryContext(ctx, `SELECT index_name, is_unique, comment, sql FROM duckdb_indexes() WHERE database_name = ? AND schema_name = ? AND table_name = ?`,
+	rows, err := adapter.QueryCatalogContext(ctx, `SELECT index_name, is_unique, comment, sql FROM duckdb_indexes() WHERE database_name = ? AND schema_name = ? AND table_name = ?`,
 		t.db.catalog, t.db.name, t.name)
 	if err != nil {
 		return nil, ErrDuckDB.New(err)
@@ -439,7 +439,7 @@ func (t *Table) Comment() string {
 }
 
 func queryColumns(ctx *sql.Context, catalogName, schemaName, tableName string) ([]*ColumnInfo, error) {
-	rows, err := adapter.QueryContext(ctx, `
+	rows, err := adapter.QueryCatalogContext(ctx, `
 		SELECT column_name, column_index, data_type, is_nullable, column_default, comment, numeric_precision, numeric_scale
 		FROM duckdb_columns() 
 		WHERE database_name = ? AND schema_name = ? AND table_name = ?

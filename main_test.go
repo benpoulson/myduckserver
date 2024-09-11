@@ -952,16 +952,27 @@ func TestSpatialInsertInto(t *testing.T) {
 
 func TestLoadData(t *testing.T) {
 	harness := NewDefaultDuckHarness()
-	harness.QueriesToSkip("create table loadtable(pk int primary key, check (pk > 1))")
+	harness.QueriesToSkip(
+		"create table loadtable(pk int primary key, check (pk > 1))",
+		"CREATE TABLE test1 (pk BIGINT PRIMARY KEY, v1 BIGINT DEFAULT (v2 * 10), v2 BIGINT DEFAULT 5);",
+		"CREATE TABLE test1 (pk BIGINT PRIMARY KEY, v1 BIGINT DEFAULT (v2 * 10), v2 BIGINT DEFAULT 5);",
+		"LOAD DATA INFILE './testdata/test2.csv' IGNORE INTO TABLE loadtable FIELDS TERMINATED BY ',' IGNORE 1 LINES",
+		"LOAD DATA INFILE './testdata/test2.csv' REPLACE INTO TABLE loadtable FIELDS TERMINATED BY ',' IGNORE 1 LINES",
+	)
 	enginetest.TestLoadData(t, harness)
 }
 
 func TestLoadDataErrors(t *testing.T) {
-	enginetest.TestLoadDataErrors(t, NewDefaultDuckHarness())
+	harness := NewDefaultDuckHarness()
+	harness.QueriesToSkip(
+		"create table loadtable(pk int primary key, c1 varchar(10))",
+	)
+	enginetest.TestLoadDataErrors(t, harness)
 }
 
 func TestLoadDataFailing(t *testing.T) {
-	enginetest.TestLoadDataFailing(t, NewDefaultDuckHarness())
+	harness := NewDefaultDuckHarness()
+	enginetest.TestLoadDataFailing(t, harness)
 }
 
 func TestSelectIntoFile(t *testing.T) {

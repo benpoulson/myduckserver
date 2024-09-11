@@ -77,7 +77,7 @@ func (d *Database) tablesInsensitive(ctx *sql.Context, pattern string) ([]*Table
 }
 
 func (d *Database) findTables(ctx *sql.Context, pattern string) ([]*Table, error) {
-	rows, err := adapter.QueryContext(ctx, "SELECT DISTINCT table_name, comment FROM duckdb_tables() where database_name = ? and schema_name = ? and table_name ILIKE ?", d.catalog, d.name, pattern)
+	rows, err := adapter.QueryCatalogContext(ctx, "SELECT DISTINCT table_name, comment FROM duckdb_tables() where database_name = ? and schema_name = ? and table_name ILIKE ?", d.catalog, d.name, pattern)
 	if err != nil {
 		return nil, ErrDuckDB.New(err)
 	}
@@ -218,7 +218,7 @@ func (d *Database) extractViewDefinitions(ctx *sql.Context, schemaName string, v
 		args = append(args, viewName)
 	}
 
-	rows, err := adapter.QueryContext(ctx, query, args...)
+	rows, err := adapter.QueryCatalogContext(ctx, query, args...)
 	if err != nil {
 		return nil, ErrDuckDB.New(err)
 	}
