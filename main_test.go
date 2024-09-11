@@ -951,17 +951,16 @@ func TestSpatialInsertInto(t *testing.T) {
 }
 
 func TestLoadData(t *testing.T) {
-	t.Skip("wait for fix")
-	enginetest.TestLoadData(t, NewDefaultDuckHarness())
+	harness := NewDefaultDuckHarness()
+	harness.QueriesToSkip("create table loadtable(pk int primary key, check (pk > 1))")
+	enginetest.TestLoadData(t, harness)
 }
 
 func TestLoadDataErrors(t *testing.T) {
-	t.Skip("wait for fix")
 	enginetest.TestLoadDataErrors(t, NewDefaultDuckHarness())
 }
 
 func TestLoadDataFailing(t *testing.T) {
-	t.Skip("wait for fix")
 	enginetest.TestLoadDataFailing(t, NewDefaultDuckHarness())
 }
 

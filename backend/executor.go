@@ -14,10 +14,8 @@
 package backend
 
 import (
-	"context"
 	stdsql "database/sql"
 	"fmt"
-	"sync"
 
 	"github.com/apecloud/myduckserver/catalog"
 	"github.com/apecloud/myduckserver/transpiler"
@@ -30,52 +28,17 @@ import (
 )
 
 type DuckBuilder struct {
-	base        sql.NodeExecBuilder
-	db          *stdsql.DB
-	catalogName string
-	conns       sync.Map // map[uint32]*stdsql.Conn, but sync.Map is concurrent-safe
+	base sql.NodeExecBuilder
+	pool *ConnectionPool
 }
 
 var _ sql.NodeExecBuilder = (*DuckBuilder)(nil)
 
-func NewDuckBuilder(base sql.NodeExecBuilder, db *stdsql.DB, catalogName string) *DuckBuilder {
+func NewDuckBuilder(base sql.NodeExecBuilder, pool *ConnectionPool) *DuckBuilder {
 	return &DuckBuilder{
-		base:        base,
-		db:          db,
-		catalogName: catalogName,
+		base: base,
+		pool: pool,
 	}
-}
-
-func (b *DuckBuilder) GetConn(ctx context.Context, id uint32, schemaName string) (*stdsql.Conn, error) {
-	var conn *stdsql.Conn
-	entry, ok := b.conns.Load(id)
-	if !ok {
-		c, err := b.db.Conn(ctx)
-		if err != nil {
-			return nil, err
-		}
-		b.conns.Store(id, c)
-		conn = c
-	} else {
-		conn = entry.(*stdsql.Conn)
-	}
-
-	if schemaName != "" {
-		var currentSchema string
-		if err := conn.QueryRowContext(ctx, "SELECT CURRENT_SCHEMA()").Scan(&currentSchema); err != nil {
-			logrus.WithError(err).Error("Failed to get current schema")
-			return nil, err
-		} else if currentSchema != schemaName {
-			if _, err := conn.ExecContext(ctx, "USE "+catalog.FullSchemaName(b.catalogName, schemaName)); err != nil {
-				if catalog.IsDuckDBSetSchemaNotFoundError(err) {
-					return nil, sql.ErrDatabaseNotFound.New(schemaName)
-				}
-				logrus.WithField("schema", schemaName).WithError(err).Error("Failed to switch schema")
-				return nil, err
-			}
-		}
-	}
-	return conn, nil
 }
 
 func (b *DuckBuilder) Build(ctx *sql.Context, root sql.Node, r sql.Row) (sql.RowIter, error) {
@@ -123,14 +86,14 @@ func (b *DuckBuilder) Build(ctx *sql.Context, root sql.Node, r sql.Row) (sql.Row
 		return b.base.Build(ctx, root, r)
 	}
 
-	conn, err := b.GetConn(ctx, ctx.ID(), ctx.GetCurrentDatabase())
+	conn, err := b.pool.GetConn(ctx, ctx.ID(), ctx.GetCurrentDatabase())
 	if err != nil {
 		return nil, err
 	}
 
 	switch node := n.(type) {
 	case *plan.Use:
-		useStmt := "USE " + catalog.FullSchemaName(b.catalogName, node.Database().Name())
+		useStmt := "USE " + catalog.FullSchemaName(b.pool.catalog, node.Database().Name())
 		if _, err := conn.ExecContext(ctx.Context, useStmt); err != nil {
 			if catalog.IsDuckDBSetSchemaNotFoundError(err) {
 				return nil, sql.ErrDatabaseNotFound.New(node.Database().Name())

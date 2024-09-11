@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/apecloud/myduckserver/adapter"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/marcboeker/go-duckdb"
@@ -17,6 +18,7 @@ type Table struct {
 	name    string
 	db      *Database
 	comment *Comment[any] // save the comment to avoid querying duckdb everytime
+	schema  sql.PrimaryKeySchema
 }
 
 type ColumnInfo struct {
@@ -46,11 +48,20 @@ func NewTable(name string, db *Database) *Table {
 	return &Table{
 		mu:   &sync.RWMutex{},
 		name: name,
-		db:   db}
+		db:   db,
+	}
 }
 
 func (t *Table) WithComment(comment *Comment[any]) *Table {
 	t.comment = comment
+	return t
+}
+
+func (t *Table) WithSchema(ctx *sql.Context) *Table {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.schema = getPKSchema(ctx, t.db.catalogName, t.db.name, t.name)
 	return t
 }
 
@@ -76,21 +87,17 @@ func (t *Table) Partitions(ctx *sql.Context) (sql.PartitionIter, error) {
 
 // Schema implements sql.Table.
 func (t *Table) Schema() sql.Schema {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	schema, _ := t.schema()
-	return schema
+	return t.schema.Schema
 }
 
-func (t *Table) schema() (sql.Schema, []int) {
+func getPKSchema(ctx *sql.Context, catalogName, dbName, tableName string) sql.PrimaryKeySchema {
 	var schema sql.Schema
 
-	columnsInfo, err := queryColumnsInfo(t.db.storage, t.db.catalogName, t.db.name, t.name)
+	columns, err := queryColumns(ctx, catalogName, dbName, tableName)
 	if err != nil {
 		panic(ErrDuckDB.New(err))
 	}
-	for _, columnInfo := range columnsInfo {
+	for _, columnInfo := range columns {
 		defaultValue := (*sql.ColumnDefaultValue)(nil)
 		if columnInfo.ColumnDefault.Valid {
 			defaultValue = sql.NewUnresolvedColumnDefaultValue(columnInfo.ColumnDefault.String)
@@ -102,8 +109,8 @@ func (t *Table) schema() (sql.Schema, []int) {
 			Name:           columnInfo.ColumnName,
 			Type:           columnInfo.DataType,
 			Nullable:       columnInfo.IsNullable,
-			Source:         t.name,
-			DatabaseSource: t.db.name,
+			Source:         tableName,
+			DatabaseSource: dbName,
 			Default:        defaultValue,
 			Comment:        decodedComment.Text,
 		}
@@ -112,10 +119,10 @@ func (t *Table) schema() (sql.Schema, []int) {
 	}
 
 	// Add primary key columns to the schema
-	primaryKeyOrdinals := t.primaryKeyOrdinals()
+	primaryKeyOrdinals := getPrimaryKeyOrdinals(ctx, catalogName, dbName, tableName)
 	setPrimaryKeyColumns(schema, primaryKeyOrdinals)
 
-	return schema, primaryKeyOrdinals
+	return sql.NewPrimaryKeySchema(schema, primaryKeyOrdinals...)
 }
 
 func setPrimaryKeyColumns(schema sql.Schema, ordinals []int) {
@@ -131,17 +138,13 @@ func (t *Table) String() string {
 
 // PrimaryKeySchema implements sql.PrimaryKeyTable.
 func (t *Table) PrimaryKeySchema() sql.PrimaryKeySchema {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	schema, ordinals := t.schema()
-	return sql.NewPrimaryKeySchema(schema, ordinals...)
+	return t.schema
 }
 
-func (t *Table) primaryKeyOrdinals() []int {
-	rows, err := t.db.storage.Query(`
+func getPrimaryKeyOrdinals(ctx *sql.Context, catalogName, dbName, tableName string) []int {
+	rows, err := adapter.QueryContext(ctx, `
 		SELECT constraint_column_indexes FROM duckdb_constraints() WHERE database_name = ? AND schema_name = ? AND table_name = ? AND constraint_type = 'PRIMARY KEY' LIMIT 1
-	`, t.db.catalogName, t.db.name, t.name)
+	`, catalogName, dbName, tableName)
 	if err != nil {
 		panic(ErrDuckDB.New(err))
 	}
@@ -185,7 +188,7 @@ func (t *Table) AddColumn(ctx *sql.Context, column *sql.Column, order *sql.Colum
 	comment := NewCommentWithMeta(column.Comment, typ.mysql)
 	sql += fmt.Sprintf(`; COMMENT ON COLUMN %s IS '%s'`, FullColumnName(t.db.catalogName, t.db.name, t.name, column.Name), comment.Encode())
 
-	_, err = t.db.storage.Exec(sql)
+	_, err = adapter.ExecContext(ctx, sql)
 	if err != nil {
 		return ErrDuckDB.New(err)
 	}
@@ -200,7 +203,7 @@ func (t *Table) DropColumn(ctx *sql.Context, columnName string) error {
 
 	sql := fmt.Sprintf(`ALTER TABLE %s DROP COLUMN "%s"`, FullTableName(t.db.catalogName, t.db.name, t.name), columnName)
 
-	_, err := t.db.storage.Exec(sql)
+	_, err := adapter.ExecContext(ctx, sql)
 	if err != nil {
 		return ErrDuckDB.New(err)
 	}
@@ -244,7 +247,7 @@ func (t *Table) ModifyColumn(ctx *sql.Context, columnName string, column *sql.Co
 	sqls = append(sqls, fmt.Sprintf(`COMMENT ON COLUMN %s IS '%s'`, FullColumnName(t.db.catalogName, t.db.name, t.name, column.Name), comment.Encode()))
 
 	joinedSQL := strings.Join(sqls, "; ")
-	_, err = t.db.storage.Exec(joinedSQL)
+	_, err = adapter.ExecContext(ctx, joinedSQL)
 	if err != nil {
 		logrus.Errorf("run duckdb sql failed: %s", joinedSQL)
 		return ErrDuckDB.New(err)
@@ -261,11 +264,10 @@ func (t *Table) Updater(ctx *sql.Context) sql.RowUpdater {
 
 // Inserter implements sql.InsertableTable.
 func (t *Table) Inserter(*sql.Context) sql.RowInserter {
-	schema, _ := t.schema()
 	return &rowInserter{
 		db:     t.db.Name(),
 		table:  t.name,
-		schema: schema,
+		schema: t.schema.Schema,
 	}
 }
 
@@ -319,7 +321,7 @@ func (t *Table) CreateIndex(ctx *sql.Context, indexDef sql.IndexDef) error {
 	}
 
 	// Execute the SQL statement to create the index
-	_, err := t.db.storage.Exec(sqlsBuilder.String())
+	_, err := adapter.ExecContext(ctx, sqlsBuilder.String())
 	if err != nil {
 		if IsDuckDBIndexAlreadyExistsError(err) {
 			return sql.ErrDuplicateKey.New(indexDef.Name)
@@ -342,7 +344,7 @@ func (t *Table) DropIndex(ctx *sql.Context, indexName string) error {
 		EncodeIndexName(t.name, indexName))
 
 	// Execute the SQL statement to drop the index
-	_, err := t.db.storage.Exec(sql)
+	_, err := adapter.ExecContext(ctx, sql)
 	if err != nil {
 		return ErrDuckDB.New(err)
 	}
@@ -362,7 +364,7 @@ func (t *Table) GetIndexes(ctx *sql.Context) ([]sql.Index, error) {
 	defer t.mu.RUnlock()
 
 	// Query to get the indexes for the table
-	rows, err := t.db.storage.Query(`SELECT index_name, is_unique, comment, sql FROM duckdb_indexes() WHERE database_name = ? AND schema_name = ? AND table_name = ?`,
+	rows, err := adapter.QueryContext(ctx, `SELECT index_name, is_unique, comment, sql FROM duckdb_indexes() WHERE database_name = ? AND schema_name = ? AND table_name = ?`,
 		t.db.catalogName, t.db.name, t.name)
 	if err != nil {
 		return nil, ErrDuckDB.New(err)
@@ -372,7 +374,7 @@ func (t *Table) GetIndexes(ctx *sql.Context) ([]sql.Index, error) {
 	indexes := []sql.Index{}
 
 	// Primary key is not returned by duckdb_indexes()
-	sch, pkOrds := t.schema()
+	sch, pkOrds := t.schema.Schema, t.schema.PkOrdinals
 	if len(pkOrds) > 0 {
 		pkExprs := make([]sql.Expression, len(pkOrds))
 		for i, ord := range pkOrds {
@@ -381,7 +383,7 @@ func (t *Table) GetIndexes(ctx *sql.Context) ([]sql.Index, error) {
 		indexes = append(indexes, NewIndex(t.db.name, t.name, "PRIMARY", true, NewComment[any](""), pkExprs))
 	}
 
-	columnsInfo, err := queryColumnsInfo(t.db.storage, t.db.catalogName, t.db.name, t.name)
+	columnsInfo, err := queryColumns(ctx, t.db.catalogName, t.db.name, t.name)
 	columnsInfoMap := make(map[string]*ColumnInfo)
 	for _, columnInfo := range columnsInfo {
 		columnsInfoMap[columnInfo.ColumnName] = columnInfo
@@ -436,9 +438,8 @@ func (t *Table) Comment() string {
 	return t.comment.Text
 }
 
-func queryColumnsInfo(db *stdsql.DB, catalogName, schemaName, tableName string) ([]*ColumnInfo, error) {
-
-	rows, err := db.Query(`
+func queryColumns(ctx *sql.Context, catalogName, schemaName, tableName string) ([]*ColumnInfo, error) {
+	rows, err := adapter.QueryContext(ctx, `
 		SELECT column_name, column_index, data_type, is_nullable, column_default, comment, numeric_precision, numeric_scale
 		FROM duckdb_columns() 
 		WHERE database_name = ? AND schema_name = ? AND table_name = ?
@@ -483,6 +484,5 @@ func queryColumnsInfo(db *stdsql.DB, catalogName, schemaName, tableName string) 
 }
 
 func (t *IndexedTable) LookupPartitions(ctx *sql.Context, lookup sql.IndexLookup) (sql.PartitionIter, error) {
-
 	return nil, fmt.Errorf("unimplemented(LookupPartitions) (table: %s, query: %s)", t.name, ctx.Query())
 }

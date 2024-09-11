@@ -47,6 +47,7 @@ type DuckHarness struct {
 	numTablePartitions int
 	//	readonly                  bool
 	provider                  sql.DatabaseProvider
+	pool                      *backend.ConnectionPool
 	indexDriverInitializer    IndexDriverInitializer
 	driver                    sql.IndexDriver
 	nativeIndexSupport        bool
@@ -119,7 +120,8 @@ func (m *DuckHarness) SessionBuilder() server.SessionBuilder {
 		}
 		client := sql.Client{Address: host, User: user, Capabilities: c.Capabilities}
 		baseSession := sql.NewBaseSessionWithClientServer(addr, client, c.ConnectionID)
-		return memory.NewSession(baseSession, m.getProvider()), nil
+		memSession := memory.NewSession(baseSession, m.getProvider())
+		return backend.NewSession(memSession, m.getProvider().(*catalog.DatabaseProvider), m.pool), nil
 	}
 }
 
@@ -292,11 +294,15 @@ func (m *DuckHarness) NewEngine(t *testing.T) (enginetest.QueryEngine, error) {
 // copy from go-mysql-server/enginetest/initialization.go
 // NewEngine creates an engine and sets it up for testing using harness, provider, and setup data given.
 func NewEngine(t *testing.T, harness enginetest.Harness, dbProvider sql.DatabaseProvider, setupData []setup.SetupScript, statsProvider sql.StatsProvider) (*sqle.Engine, error) {
+	// Create the connection pool first, as it is needed by `NewEngineWithProvider`
+	provider := dbProvider.(*catalog.DatabaseProvider)
+	pool := backend.NewConnectionPool(provider.CatalogName(), provider.Storage())
+	harness.(*DuckHarness).pool = pool
+
 	e := enginetest.NewEngineWithProvider(t, harness, dbProvider)
 	e.Analyzer.Catalog.StatsProvider = statsProvider
 
-	provider := dbProvider.(*catalog.DatabaseProvider)
-	builder := backend.NewDuckBuilder(e.Analyzer.ExecBuilder, provider.Storage(), provider.CatalogName())
+	builder := backend.NewDuckBuilder(e.Analyzer.ExecBuilder, pool)
 	e.Analyzer.ExecBuilder = builder
 
 	ctx := enginetest.NewContext(harness)
@@ -340,13 +346,13 @@ func (m *DuckHarness) NewContext() *sql.Context {
 	)
 }
 
-func (m *DuckHarness) newSession() *memory.Session {
+func (m *DuckHarness) newSession() sql.Session {
 	baseSession := enginetest.NewBaseSession()
 	session := memory.NewSession(baseSession, m.getProvider())
 	if m.driver != nil {
 		session.GetIndexRegistry().RegisterIndexDriver(m.driver)
 	}
-	return session
+	return backend.NewSession(session, m.getProvider().(*catalog.DatabaseProvider), m.pool)
 }
 
 func (m *DuckHarness) NewContextWithClient(client sql.Client) *sql.Context {

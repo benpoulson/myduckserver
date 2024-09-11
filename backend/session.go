@@ -29,13 +29,17 @@ import (
 
 type Session struct {
 	*memory.Session
-	db      *catalog.DatabaseProvider
-	builder *DuckBuilder
+	db   *catalog.DatabaseProvider
+	pool *ConnectionPool
+}
+
+func NewSession(base *memory.Session, provider *catalog.DatabaseProvider, pool *ConnectionPool) *Session {
+	return &Session{base, provider, pool}
 }
 
 // NewSessionBuilder returns a session builder for the given database provider.
-func NewSessionBuilder(provider *catalog.DatabaseProvider, builder *DuckBuilder) func(ctx context.Context, conn *mysql.Conn, addr string) (sql.Session, error) {
-	_, err := provider.Storage().Exec("CREATE TABLE IF NOT EXISTS main.persistent_variables (name TEXT PRIMARY KEY, value TEXT, type TEXT)")
+func NewSessionBuilder(provider *catalog.DatabaseProvider, pool *ConnectionPool) func(ctx context.Context, conn *mysql.Conn, addr string) (sql.Session, error) {
+	_, err := pool.Exec("CREATE TABLE IF NOT EXISTS main.persistent_variables (name TEXT PRIMARY KEY, value TEXT, type TEXT)")
 	if err != nil {
 		panic(err)
 	}
@@ -52,13 +56,13 @@ func NewSessionBuilder(provider *catalog.DatabaseProvider, builder *DuckBuilder)
 		client := sql.Client{Address: host, User: user, Capabilities: conn.Capabilities}
 		baseSession := sql.NewBaseSessionWithClientServer(addr, client, conn.ConnectionID)
 		memSession := memory.NewSession(baseSession, provider)
-		return Session{memSession, provider, builder}, nil
+		return Session{memSession, provider, pool}, nil
 	}
 }
 
 var _ sql.TransactionSession = (*Session)(nil)
 var _ sql.PersistableSession = (*Session)(nil)
-var _ adapter.ConnHolder = (*Session)(nil)
+var _ adapter.ConnectionHolder = (*Session)(nil)
 
 type Transaction struct {
 	memory.Transaction
@@ -133,7 +137,8 @@ func (sess Session) PersistGlobal(sysVarName string, value interface{}) error {
 	if _, _, ok := sql.SystemVariables.GetGlobal(sysVarName); !ok {
 		return sql.ErrUnknownSystemVariable.New(sysVarName)
 	}
-	_, err := sess.db.Storage().Exec(
+	_, err := sess.ExecContext(
+		context.Background(),
 		"INSERT OR REPLACE INTO main.persistent_variables (name, value, vtype) VALUES (?, ?, ?)",
 		sysVarName, value, fmt.Sprintf("%T", value),
 	)
@@ -142,7 +147,8 @@ func (sess Session) PersistGlobal(sysVarName string, value interface{}) error {
 
 // RemovePersistedGlobal implements sql.PersistableSession.
 func (sess Session) RemovePersistedGlobal(sysVarName string) error {
-	_, err := sess.db.Storage().Exec(
+	_, err := sess.ExecContext(
+		context.Background(),
 		"DELETE FROM main.persistent_variables WHERE name = ?",
 		sysVarName,
 	)
@@ -151,14 +157,15 @@ func (sess Session) RemovePersistedGlobal(sysVarName string) error {
 
 // RemoveAllPersistedGlobals implements sql.PersistableSession.
 func (sess Session) RemoveAllPersistedGlobals() error {
-	_, err := sess.db.Storage().Exec("DELETE FROM main.persistent_variables")
+	_, err := sess.ExecContext(context.Background(), "DELETE FROM main.persistent_variables")
 	return err
 }
 
 // GetPersistedValue implements sql.PersistableSession.
 func (sess Session) GetPersistedValue(k string) (interface{}, error) {
 	var value, vtype string
-	err := sess.db.Storage().QueryRow(
+	err := sess.QueryRow(
+		context.Background(),
 		"SELECT value, vtype FROM main.persistent_variables WHERE name = ?", k,
 	).Scan(&value, &vtype)
 	switch {
@@ -181,6 +188,22 @@ func (sess Session) GetPersistedValue(k string) (interface{}, error) {
 }
 
 // GetConn implements adapter.ConnHolder.
-func (see Session) GetConn(ctx *sql.Context) (*stdsql.Conn, error) {
-	return see.builder.GetConn(ctx, ctx.ID(), ctx.GetCurrentDatabase())
+func (sess Session) GetConn(ctx context.Context) (*stdsql.Conn, error) {
+	return sess.pool.GetConn(ctx, sess.ID(), sess.GetCurrentDatabase())
+}
+
+func (sess Session) ExecContext(ctx context.Context, query string, args ...interface{}) (stdsql.Result, error) {
+	conn, err := sess.GetConn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return conn.ExecContext(ctx, query, args...)
+}
+
+func (sess Session) QueryRow(ctx context.Context, query string, args ...interface{}) *stdsql.Row {
+	conn, err := sess.GetConn(ctx)
+	if err != nil {
+		return nil
+	}
+	return conn.QueryRowContext(ctx, query, args...)
 }

@@ -27,7 +27,7 @@ var _ sql.RowInserter = &rowInserter{}
 
 func (ri *rowInserter) init(ctx *sql.Context) {
 	ri.tmpTable = fmt.Sprintf("%s_%s_%d", ri.db, ri.table, ctx.ID())
-	ri.conn, ri.err = ctx.Session.(adapter.ConnHolder).GetConn(ctx)
+	ri.conn, ri.err = ctx.Session.(adapter.ConnectionHolder).GetConn(ctx)
 	if ri.err != nil {
 		return
 	}

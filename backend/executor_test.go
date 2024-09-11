@@ -63,8 +63,9 @@ func TestDuckBuilder_Select(t *testing.T) {
 	defer conn.Close()
 
 	provider := memory.NewDBProvider()
-	builder := NewDuckBuilder(&mockNodeExecBuilder{}, db, "")
-	builder.conns.Store(uint32(1), conn)
+	pool := NewConnectionPool("", db)
+	builder := NewDuckBuilder(&mockNodeExecBuilder{}, pool)
+	pool.conns.Store(uint32(1), conn)
 	session := memory.NewSession(sql.NewBaseSessionWithClientServer("", sql.Client{}, 1), provider)
 	ctx := sql.NewContext(context.Background(), sql.WithSession(session), sql.WithQuery("SELECT * FROM test_table"))
 
