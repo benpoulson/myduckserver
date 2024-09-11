@@ -150,7 +150,7 @@ func (prov *DatabaseProvider) HasDatabase(ctx *sql.Context, name string) bool {
 }
 
 func hasDatabase(ctx *sql.Context, catalog string, name string) (bool, error) {
-	rows, err := adapter.QueryContext(ctx, "SELECT DISTINCT schema_name FROM information_schema.schemata WHERE catalog_name = ? AND schema_name ILIKE ?", catalog, name)
+	rows, err := adapter.QueryCatalogContext(ctx, "SELECT DISTINCT schema_name FROM information_schema.schemata WHERE catalog_name = ? AND schema_name ILIKE ?", catalog, name)
 	if err != nil {
 		return false, ErrDuckDB.New(err)
 	}

@@ -108,7 +108,6 @@ func TestIsPureDataQuery(t *testing.T) {
 				"CREATE table xy (x int primary key, y int, unique index y_idx(y));",
 			},
 		})
-	ctx := enginetest.NewContext(harness)
 	engine, err := harness.NewEngine(t)
 	require.NoError(t, err)
 	tests := []struct {
@@ -148,6 +147,7 @@ func TestIsPureDataQuery(t *testing.T) {
 		// },
 	}
 	for _, tt := range tests {
+		ctx := enginetest.NewContext(harness)
 		analyzed, err := engine.AnalyzeQuery(ctx, tt.query)
 		require.NoError(t, err)
 		result := backend.IsPureDataQuery(analyzed)
