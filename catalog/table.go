@@ -61,7 +61,7 @@ func (t *Table) WithSchema(ctx *sql.Context) *Table {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	t.schema = getPKSchema(ctx, t.db.catalogName, t.db.name, t.name)
+	t.schema = getPKSchema(ctx, t.db.catalog, t.db.name, t.name)
 	return t
 }
 
@@ -174,7 +174,7 @@ func (t *Table) AddColumn(ctx *sql.Context, column *sql.Column, order *sql.Colum
 		return err
 	}
 
-	sql := fmt.Sprintf(`ALTER TABLE %s ADD COLUMN "%s" %s`, FullTableName(t.db.catalogName, t.db.name, t.name), column.Name, typ.name)
+	sql := fmt.Sprintf(`ALTER TABLE %s ADD COLUMN "%s" %s`, FullTableName(t.db.catalog, t.db.name, t.name), column.Name, typ.name)
 
 	if !column.Nullable {
 		sql += " NOT NULL"
@@ -186,7 +186,7 @@ func (t *Table) AddColumn(ctx *sql.Context, column *sql.Column, order *sql.Colum
 
 	// add comment
 	comment := NewCommentWithMeta(column.Comment, typ.mysql)
-	sql += fmt.Sprintf(`; COMMENT ON COLUMN %s IS '%s'`, FullColumnName(t.db.catalogName, t.db.name, t.name, column.Name), comment.Encode())
+	sql += fmt.Sprintf(`; COMMENT ON COLUMN %s IS '%s'`, FullColumnName(t.db.catalog, t.db.name, t.name, column.Name), comment.Encode())
 
 	_, err = adapter.ExecContext(ctx, sql)
 	if err != nil {
@@ -201,7 +201,7 @@ func (t *Table) DropColumn(ctx *sql.Context, columnName string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	sql := fmt.Sprintf(`ALTER TABLE %s DROP COLUMN "%s"`, FullTableName(t.db.catalogName, t.db.name, t.name), columnName)
+	sql := fmt.Sprintf(`ALTER TABLE %s DROP COLUMN "%s"`, FullTableName(t.db.catalog, t.db.name, t.name), columnName)
 
 	_, err := adapter.ExecContext(ctx, sql)
 	if err != nil {
@@ -221,7 +221,7 @@ func (t *Table) ModifyColumn(ctx *sql.Context, columnName string, column *sql.Co
 		return err
 	}
 
-	baseSQL := fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN "%s"`, FullTableName(t.db.catalogName, t.db.name, t.name), columnName)
+	baseSQL := fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN "%s"`, FullTableName(t.db.catalog, t.db.name, t.name), columnName)
 	sqls := []string{
 		fmt.Sprintf(`%s TYPE %s`, baseSQL, typ.name),
 	}
@@ -239,12 +239,12 @@ func (t *Table) ModifyColumn(ctx *sql.Context, columnName string, column *sql.Co
 	}
 
 	if columnName != column.Name {
-		sqls = append(sqls, fmt.Sprintf(`ALTER TABLE %s RENAME "%s" TO "%s"`, FullTableName(t.db.catalogName, t.db.name, t.name), columnName, column.Name))
+		sqls = append(sqls, fmt.Sprintf(`ALTER TABLE %s RENAME "%s" TO "%s"`, FullTableName(t.db.catalog, t.db.name, t.name), columnName, column.Name))
 	}
 
 	// alter comment
 	comment := NewCommentWithMeta(column.Comment, typ.mysql)
-	sqls = append(sqls, fmt.Sprintf(`COMMENT ON COLUMN %s IS '%s'`, FullColumnName(t.db.catalogName, t.db.name, t.name, column.Name), comment.Encode()))
+	sqls = append(sqls, fmt.Sprintf(`COMMENT ON COLUMN %s IS '%s'`, FullColumnName(t.db.catalog, t.db.name, t.name, column.Name), comment.Encode()))
 
 	joinedSQL := strings.Join(sqls, "; ")
 	_, err = adapter.ExecContext(ctx, joinedSQL)
@@ -310,13 +310,13 @@ func (t *Table) CreateIndex(ctx *sql.Context, indexDef sql.IndexDef) error {
 	sqlsBuilder.WriteString(fmt.Sprintf(`CREATE %s INDEX "%s" ON %s (%s)`,
 		unique,
 		EncodeIndexName(t.name, indexDef.Name),
-		FullTableName(t.db.catalogName, t.db.name, t.name),
+		FullTableName(t.db.catalog, t.db.name, t.name),
 		strings.Join(columns, ", ")))
 
 	// Add the index comment if provided
 	if indexDef.Comment != "" {
 		sqlsBuilder.WriteString(fmt.Sprintf("; COMMENT ON INDEX %s IS '%s'",
-			FullIndexName(t.db.catalogName, t.db.name, EncodeIndexName(t.name, indexDef.Name)),
+			FullIndexName(t.db.catalog, t.db.name, EncodeIndexName(t.name, indexDef.Name)),
 			NewComment[any](indexDef.Comment).Encode()))
 	}
 
@@ -340,7 +340,7 @@ func (t *Table) DropIndex(ctx *sql.Context, indexName string) error {
 	// Construct the SQL statement for dropping the index
 	// DuckDB requires switching context to the schema by USE statement
 	sql := fmt.Sprintf(`USE %s; DROP INDEX "%s"`,
-		FullSchemaName(t.db.catalogName, t.db.name),
+		FullSchemaName(t.db.catalog, t.db.name),
 		EncodeIndexName(t.name, indexName))
 
 	// Execute the SQL statement to drop the index
@@ -365,7 +365,7 @@ func (t *Table) GetIndexes(ctx *sql.Context) ([]sql.Index, error) {
 
 	// Query to get the indexes for the table
 	rows, err := adapter.QueryContext(ctx, `SELECT index_name, is_unique, comment, sql FROM duckdb_indexes() WHERE database_name = ? AND schema_name = ? AND table_name = ?`,
-		t.db.catalogName, t.db.name, t.name)
+		t.db.catalog, t.db.name, t.name)
 	if err != nil {
 		return nil, ErrDuckDB.New(err)
 	}
@@ -383,7 +383,7 @@ func (t *Table) GetIndexes(ctx *sql.Context) ([]sql.Index, error) {
 		indexes = append(indexes, NewIndex(t.db.name, t.name, "PRIMARY", true, NewComment[any](""), pkExprs))
 	}
 
-	columnsInfo, err := queryColumns(ctx, t.db.catalogName, t.db.name, t.name)
+	columnsInfo, err := queryColumns(ctx, t.db.catalog, t.db.name, t.name)
 	columnsInfoMap := make(map[string]*ColumnInfo)
 	for _, columnInfo := range columnsInfo {
 		columnsInfoMap[columnInfo.ColumnName] = columnInfo

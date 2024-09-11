@@ -15,7 +15,7 @@ func GetConn(ctx *sql.Context) (*stdsql.Conn, error) {
 	return ctx.Session.(ConnectionHolder).GetConn(ctx)
 }
 
-func QueryContext(ctx *sql.Context, query string, args ...interface{}) (*stdsql.Rows, error) {
+func QueryContext(ctx *sql.Context, query string, args ...any) (*stdsql.Rows, error) {
 	conn, err := GetConn(ctx)
 	if err != nil {
 		return nil, err
@@ -23,7 +23,7 @@ func QueryContext(ctx *sql.Context, query string, args ...interface{}) (*stdsql.
 	return conn.QueryContext(ctx, query, args...)
 }
 
-func ExecContext(ctx *sql.Context, query string, args ...interface{}) (stdsql.Result, error) {
+func ExecContext(ctx *sql.Context, query string, args ...any) (stdsql.Result, error) {
 	conn, err := GetConn(ctx)
 	if err != nil {
 		return nil, err
