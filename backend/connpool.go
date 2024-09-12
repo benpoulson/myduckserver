@@ -80,6 +80,7 @@ func (p *ConnectionPool) GetConnForSchema(ctx context.Context, id uint32, schema
 }
 
 func (p *ConnectionPool) CloseConn(id uint32) error {
+	defer p.conns.Delete(id)
 	entry, ok := p.conns.Load(id)
 	if ok {
 		conn := entry.(*stdsql.Conn)
@@ -87,7 +88,6 @@ func (p *ConnectionPool) CloseConn(id uint32) error {
 			logrus.WithError(err).Warn("Failed to close connection")
 			return err
 		}
-		p.conns.Delete(id)
 	}
 	return nil
 }
