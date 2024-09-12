@@ -18,6 +18,7 @@ package harness
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -279,21 +280,21 @@ func (m *DuckHarness) NewEngine(t *testing.T) (enginetest.QueryEngine, error) {
 		m.session = nil
 		m.provider = nil
 	}
-	engine, err := NewEngine(t, m, m.getProvider(), m.setupData, memory.NewStatsProv())
-	if err != nil {
-		return nil, err
-	}
+	return NewEngine(t, m, m.getProvider(), m.setupData, memory.NewStatsProv(), m.server)
+}
 
-	if m.server {
-		return enginetest.NewServerQueryEngine(t, engine, m.SessionBuilder())
-	}
+type DuckTestEngine struct {
+	enginetest.QueryEngine
+	pool *backend.ConnectionPool
+}
 
-	return engine, nil
+func (e *DuckTestEngine) Close() error {
+	return errors.Join(e.QueryEngine.Close(), e.pool.Close())
 }
 
 // copy from go-mysql-server/enginetest/initialization.go
 // NewEngine creates an engine and sets it up for testing using harness, provider, and setup data given.
-func NewEngine(t *testing.T, harness enginetest.Harness, dbProvider sql.DatabaseProvider, setupData []setup.SetupScript, statsProvider sql.StatsProvider) (*sqle.Engine, error) {
+func NewEngine(t *testing.T, harness enginetest.Harness, dbProvider sql.DatabaseProvider, setupData []setup.SetupScript, statsProvider sql.StatsProvider, server bool) (enginetest.QueryEngine, error) {
 	// Create the connection pool first, as it is needed by `NewEngineWithProvider`
 	provider := dbProvider.(*catalog.DatabaseProvider)
 	pool := backend.NewConnectionPool(provider.CatalogName(), provider.Storage())
@@ -316,7 +317,19 @@ func NewEngine(t *testing.T, harness enginetest.Harness, dbProvider sql.Database
 	if len(setupData) == 0 {
 		setupData = setup.MydbData
 	}
-	return enginetest.RunSetupScripts(ctx, e, setupData, supportsIndexes)
+	e, err := enginetest.RunSetupScripts(ctx, e, setupData, supportsIndexes)
+	if err != nil {
+		return nil, err
+	}
+
+	var qe enginetest.QueryEngine = e
+	if server {
+		qe, err = enginetest.NewServerQueryEngine(t, e, harness.(*DuckHarness).SessionBuilder())
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &DuckTestEngine{qe, pool}, nil
 }
 
 func (m *DuckHarness) SupportsNativeIndexCreation() bool {

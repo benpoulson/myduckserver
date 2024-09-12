@@ -1557,7 +1557,7 @@ func TestPersist(t *testing.T) {
 	newSess := func(_ *sql.Context) sql.PersistableSession {
 		ctx := harness.NewSession()
 		persistedGlobals := memory.GlobalsMap{}
-		memSession := ctx.Session.(*memory.Session).SetGlobals(persistedGlobals)
+		memSession := ctx.Session.(*backend.Session).SetGlobals(persistedGlobals)
 		return memSession
 	}
 	enginetest.TestPersist(t, harness, newSess)
@@ -1574,7 +1574,7 @@ func TestValidateSession(t *testing.T) {
 		t.Skip("It depends on ValidateSession() method call on context")
 	}
 	newSess := func(ctx *sql.Context) sql.PersistableSession {
-		memSession := ctx.Session.(*memory.Session)
+		memSession := ctx.Session.(*backend.Session)
 		memSession.SetValidationCallback(incrementValidateCb)
 		return memSession
 	}

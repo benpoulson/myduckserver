@@ -16,6 +16,7 @@ package backend
 import (
 	"context"
 	stdsql "database/sql"
+	"errors"
 	"sync"
 
 	"github.com/apecloud/myduckserver/catalog"
@@ -26,7 +27,8 @@ import (
 type ConnectionPool struct {
 	*stdsql.DB
 	catalog string
-	conns   sync.Map // map[uint32]*stdsql.Conn, but sync.Map is concurrent-safe
+	conns   sync.Map // concurrent-safe map[uint32]*stdsql.Conn
+	txns    sync.Map // concurrent-safe map[uint32]*stdsql.Tx
 }
 
 func NewConnectionPool(catalog string, db *stdsql.DB) *ConnectionPool {
@@ -88,4 +90,56 @@ func (p *ConnectionPool) CloseConn(id uint32) error {
 		p.conns.Delete(id)
 	}
 	return nil
+}
+
+func (p *ConnectionPool) GetTxn(ctx context.Context, id uint32, schemaName string, options *stdsql.TxOptions) (*stdsql.Tx, error) {
+	var tx *stdsql.Tx
+	entry, ok := p.txns.Load(id)
+	if !ok {
+		conn, err := p.GetConnForSchema(ctx, id, schemaName)
+		if err != nil {
+			return nil, err
+		}
+		t, err := conn.BeginTx(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		p.txns.Store(id, t)
+		tx = t
+	} else {
+		tx = entry.(*stdsql.Tx)
+	}
+	return tx, nil
+}
+
+func (p *ConnectionPool) CloseTxn(id uint32) {
+	p.txns.Delete(id)
+}
+
+func (p *ConnectionPool) Close() error {
+	var txns []*stdsql.Tx
+	p.txns.Range(func(_, value any) bool {
+		txns = append(txns, value.(*stdsql.Tx))
+		return true
+	})
+	var lastErr error
+	for _, tx := range txns {
+		if err := tx.Rollback(); err != nil {
+			logrus.WithError(err).Warn("Failed to rollback transaction")
+			lastErr = err
+		}
+	}
+
+	var conns []*stdsql.Conn
+	p.conns.Range(func(_, value any) bool {
+		conns = append(conns, value.(*stdsql.Conn))
+		return true
+	})
+	for _, conn := range conns {
+		if err := conn.Close(); err != nil {
+			logrus.WithError(err).Warn("Failed to close connection")
+			lastErr = err
+		}
+	}
+	return errors.Join(lastErr, p.DB.Close())
 }

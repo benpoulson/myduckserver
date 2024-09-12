@@ -94,11 +94,7 @@ func (sess Session) StartTransaction(ctx *sql.Context, tCharacteristic sql.Trans
 	var tx *stdsql.Tx
 	if startUnderlyingTx {
 		sess.GetLogger().Infoln("StartDuckTransaction")
-		conn, err := sess.GetConn(ctx)
-		if err != nil {
-			return nil, err
-		}
-		tx, err = conn.BeginTx(ctx, &stdsql.TxOptions{ReadOnly: tCharacteristic == sql.ReadOnly})
+		tx, err = sess.GetTxn(ctx, &stdsql.TxOptions{ReadOnly: tCharacteristic == sql.ReadOnly})
 		if err != nil {
 			return nil, err
 		}
@@ -112,6 +108,7 @@ func (sess Session) CommitTransaction(ctx *sql.Context, tx sql.Transaction) erro
 	transaction := tx.(*Transaction)
 	if transaction.tx != nil {
 		sess.GetLogger().Infoln("CommitDuckTransaction")
+		defer sess.CloseTxn()
 		if err := transaction.tx.Commit(); err != nil {
 			return err
 		}
@@ -125,6 +122,7 @@ func (sess Session) Rollback(ctx *sql.Context, tx sql.Transaction) error {
 	transaction := tx.(*Transaction)
 	if transaction.tx != nil {
 		sess.GetLogger().Infoln("RollbackDuckTransaction")
+		defer sess.CloseTxn()
 		if err := transaction.tx.Rollback(); err != nil {
 			return err
 		}
@@ -197,7 +195,15 @@ func (sess Session) GetCatalogConn(ctx context.Context) (*stdsql.Conn, error) {
 	return sess.pool.GetConn(ctx, sess.ID())
 }
 
-func (sess Session) ExecContext(ctx context.Context, query string, args ...interface{}) (stdsql.Result, error) {
+func (sess Session) GetTxn(ctx context.Context, options *stdsql.TxOptions) (*stdsql.Tx, error) {
+	return sess.pool.GetTxn(ctx, sess.ID(), sess.GetCurrentDatabase(), options)
+}
+
+func (sess Session) CloseTxn() {
+	sess.pool.CloseTxn(sess.ID())
+}
+
+func (sess Session) ExecContext(ctx context.Context, query string, args ...any) (stdsql.Result, error) {
 	conn, err := sess.GetCatalogConn(ctx)
 	if err != nil {
 		return nil, err
@@ -205,7 +211,7 @@ func (sess Session) ExecContext(ctx context.Context, query string, args ...inter
 	return conn.ExecContext(ctx, query, args...)
 }
 
-func (sess Session) QueryRow(ctx context.Context, query string, args ...interface{}) *stdsql.Row {
+func (sess Session) QueryRow(ctx context.Context, query string, args ...any) *stdsql.Row {
 	conn, err := sess.GetCatalogConn(ctx)
 	if err != nil {
 		return nil
