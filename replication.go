@@ -37,7 +37,7 @@ func registerReplicaController(provider *catalog.DatabaseProvider, engine *sqle.
 	replica := binlogreplication.MyBinlogReplicaController
 	replica.SetEngine(engine)
 
-	session := memory.NewSession(sql.NewBaseSession(), provider)
+	session := backend.NewSession(memory.NewSession(sql.NewBaseSession(), provider), provider, pool)
 	ctx := sql.NewContext(context.Background(), sql.WithSession(session))
 	ctx.SetCurrentDatabase("mysql")
 	replica.SetExecutionContext(ctx)
