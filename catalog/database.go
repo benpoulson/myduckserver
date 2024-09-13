@@ -200,6 +200,12 @@ func (d *Database) RenameTable(ctx *sql.Context, oldName string, newName string)
 
 	_, err := adapter.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s RENAME TO "%s"`, FullTableName(d.catalog, d.name, oldName), newName))
 	if err != nil {
+		if IsDuckDBTableNotFoundError(err) {
+			return sql.ErrTableNotFound.New(oldName)
+		}
+		if IsDuckDBTableAlreadyExistsError(err) {
+			return sql.ErrTableAlreadyExists.New(newName)
+		}
 		return ErrDuckDB.New(err)
 	}
 	return nil

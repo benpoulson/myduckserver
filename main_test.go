@@ -1350,12 +1350,128 @@ func TestDropTable(t *testing.T) {
 }
 
 func TestRenameTable(t *testing.T) {
-	t.Skip("wait for fix")
+	queries.RenameTableScripts = []queries.ScriptTest{
+		{
+			Name: "simple rename table",
+			SetUpScript: []string{
+				"CREATE TABLE mytable0 (pk int primary key, mk int)",
+				"INSERT INTO mytable0 VALUES (1, 1)",
+			},
+			Assertions: []queries.ScriptTestAssertion{
+				{
+					Query:    "RENAME TABLE mytable0 TO newTableName",
+					Expected: []sql.Row{{types.NewOkResult(0)}},
+				},
+				{
+					Query:       "SELECT COUNT(*) FROM mytable0",
+					ExpectedErr: sql.ErrTableNotFound,
+				},
+				{
+					Query:    "SELECT COUNT(*) FROM newTableName",
+					Expected: []sql.Row{{1}},
+				},
+			},
+		},
+		{
+			Name: "rename multiple tables in one stmt",
+			SetUpScript: []string{
+				"CREATE TABLE othertable0 (pk int primary key, mk int)",
+				"INSERT INTO othertable0 VALUES (1, 1)",
+			},
+			Assertions: []queries.ScriptTestAssertion{
+				{
+					Query:    "RENAME TABLE othertable0 to othertable2, newTableName to mytable0",
+					Expected: []sql.Row{{types.NewOkResult(0)}},
+				},
+				{
+					Query:       "SELECT COUNT(*) FROM othertable0",
+					ExpectedErr: sql.ErrTableNotFound,
+				},
+				{
+					Query:       "SELECT COUNT(*) FROM newTableName",
+					ExpectedErr: sql.ErrTableNotFound,
+				},
+				{
+					Query:    "SELECT COUNT(*) FROM mytable0",
+					Expected: []sql.Row{{1}},
+				},
+				{
+					Query:    "SELECT COUNT(*) FROM othertable2",
+					Expected: []sql.Row{{1}},
+				},
+			},
+		},
+		{
+			Name: "error cases",
+			Assertions: []queries.ScriptTestAssertion{
+				{
+					Query:       "ALTER TABLE not_exist RENAME foo",
+					ExpectedErr: sql.ErrTableNotFound,
+				},
+				{
+					Query:       "ALTER TABLE emptytable RENAME niltable",
+					ExpectedErr: sql.ErrTableAlreadyExists,
+				},
+			},
+		},
+	}
 	enginetest.TestRenameTable(t, NewDefaultDuckHarness())
 }
 
 func TestRenameColumn(t *testing.T) {
-	t.Skip("wait for fix")
+	queries.RenameColumnScripts = []queries.ScriptTest{
+		{
+			Name: "error cases",
+			Assertions: []queries.ScriptTestAssertion{
+				{
+					Query:       "ALTER TABLE mytable RENAME COLUMN i2 TO iX",
+					ExpectedErr: sql.ErrTableColumnNotFound,
+				},
+				{
+					Query:       "ALTER TABLE mytable RENAME COLUMN i TO iX, RENAME COLUMN iX TO i2",
+					ExpectedErr: sql.ErrTableColumnNotFound,
+				},
+				{
+					Query:       "ALTER TABLE mytable RENAME COLUMN i TO iX, RENAME COLUMN i TO i2",
+					ExpectedErr: sql.ErrTableColumnNotFound,
+				},
+				{
+					Query:       "ALTER TABLE mytable RENAME COLUMN i TO S",
+					ExpectedErr: sql.ErrColumnExists,
+				},
+				{
+					Query:       "ALTER TABLE mytable RENAME COLUMN i TO n, RENAME COLUMN s TO N",
+					ExpectedErr: sql.ErrColumnExists,
+				},
+			},
+		},
+		{
+			Name: "simple rename column",
+			SetUpScript: []string{
+				"CREATE TABLE mytable1 (i bigint not null, s varchar(20) not null comment 'column s')",
+				"INSERT INTO mytable1 VALUES (1, 'first row')",
+			},
+			Assertions: []queries.ScriptTestAssertion{
+				{
+					Query:    "ALTER TABLE mytable1 RENAME COLUMN i TO i2, RENAME COLUMN s TO s2",
+					Expected: []sql.Row{{types.NewOkResult(0)}},
+				},
+				{
+					Query: "SHOW FULL COLUMNS FROM mytable1",
+					Expected: []sql.Row{
+						{"i2", "bigint", nil, "NO", "", nil, "", "", ""},
+						{"s2", "varchar(20)", "utf8mb4_0900_bin", "NO", "", nil, "", "", "column s"},
+					},
+				},
+				{
+					Query: "select * from mytable1 order by i2 limit 1",
+					Expected: []sql.Row{
+						{1, "first row"},
+					},
+				},
+			},
+		},
+	}
 	enginetest.TestRenameColumn(t, NewDefaultDuckHarness())
 }
 
