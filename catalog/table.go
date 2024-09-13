@@ -337,7 +337,7 @@ func (t *Table) CreateIndex(ctx *sql.Context, indexDef sql.IndexDef) error {
 
 	// Construct the SQL statement for creating the index
 	var sqlsBuilder strings.Builder
-	sqlsBuilder.WriteString(fmt.Sprintf(`USE %s; `, t.db.catalog))
+	sqlsBuilder.WriteString(fmt.Sprintf(`USE %s; `, FullSchemaName(t.db.catalog, "")))
 	sqlsBuilder.WriteString(fmt.Sprintf(`CREATE %s INDEX "%s" ON %s (%s)`,
 		unique,
 		EncodeIndexName(t.name, indexDef.Name),
