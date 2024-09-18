@@ -180,14 +180,15 @@ func (t *Table) AddColumn(ctx *sql.Context, column *sql.Column, order *sql.Colum
 	if !column.Nullable {
 		sql += " NOT NULL"
 	}
-
+	columnDefault := ""
 	if column.Default != nil {
 		sql += fmt.Sprintf(" DEFAULT %s", column.Default.String())
 		typ.mysql.Default = column.Default.String()
 	}
 
 	// add comment
-	comment := NewCommentWithMeta(column.Comment, typ.mysql)
+
+	comment := NewCommentWithColumnDefaut(column.Comment, typ.mysql, columnDefault)
 	sql += fmt.Sprintf(`; COMMENT ON COLUMN %s IS '%s'`, FullColumnName(t.db.catalog, t.db.name, t.name, column.Name), comment.Encode())
 
 	_, err = adapter.ExecContext(ctx, sql)
@@ -234,6 +235,7 @@ func (t *Table) ModifyColumn(ctx *sql.Context, columnName string, column *sql.Co
 		sqls = append(sqls, fmt.Sprintf(`%s SET NOT NULL`, baseSQL))
 	}
 
+	columnDefault := ""
 	if column.Default != nil {
 		sqls = append(sqls, fmt.Sprintf(`%s SET DEFAULT %s`, baseSQL, column.Default.String()))
 		typ.mysql.Default = column.Default.String()
@@ -246,7 +248,7 @@ func (t *Table) ModifyColumn(ctx *sql.Context, columnName string, column *sql.Co
 	}
 
 	// alter comment
-	comment := NewCommentWithMeta(column.Comment, typ.mysql)
+	comment := NewCommentWithColumnDefaut(column.Comment, typ.mysql, columnDefault)
 	sqls = append(sqls, fmt.Sprintf(`COMMENT ON COLUMN %s IS '%s'`, FullColumnName(t.db.catalog, t.db.name, t.name, column.Name), comment.Encode()))
 
 	joinedSQL := strings.Join(sqls, "; ")
