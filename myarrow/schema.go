@@ -46,11 +46,11 @@ func ToArrowType(t sql.Type) arrow.DataType {
 	case query.Type_FLOAT64:
 		return arrow.PrimitiveTypes.Float64
 	case query.Type_TIMESTAMP:
-		return &arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: "UTC"}
+		return arrow.FixedWidthTypes.Timestamp_ms
 	case query.Type_DATE:
 		return arrow.FixedWidthTypes.Date32
 	case query.Type_TIME:
-		return &arrow.Time64Type{Unit: arrow.Microsecond}
+		return arrow.FixedWidthTypes.Duration_ms
 	case query.Type_DATETIME:
 		return &arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: ""}
 	case query.Type_YEAR:

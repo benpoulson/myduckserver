@@ -1,12 +1,14 @@
 package myarrow
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/apache/arrow/go/v17/arrow"
 	"github.com/apache/arrow/go/v17/arrow/array"
 	"github.com/apache/arrow/go/v17/arrow/memory"
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql/types"
 	"github.com/shopspring/decimal"
 )
 
@@ -28,7 +30,7 @@ func (a *ArrowAppender) Release() {
 	a.builder.Release()
 }
 
-func (a *ArrowAppender) Append(row sql.Row) {
+func (a *ArrowAppender) Append(row sql.Row) error {
 	for i, b := range a.builder.Fields() {
 		v := row[i]
 		if v == nil {
@@ -58,22 +60,32 @@ func (a *ArrowAppender) Append(row sql.Row) {
 			b.(*array.Float64Builder).Append(v.(float64))
 		case arrow.STRING:
 			b.(*array.StringBuilder).Append(v.(string))
+		case arrow.BINARY:
+			b.(*array.BinaryBuilder).Append(v.([]byte))
 		case arrow.DECIMAL:
 			dv := v.(decimal.Decimal)
-			switch db := b.(type) {
-			case *array.Decimal128Builder:
-				db.Append(dv)
-			case *array.Decimal256Builder:
-				db.Append(dv)
-			default:
-				panic("Unknown decimal builder")
-			}
+			sv := dv.String()
+			b.AppendValueFromString(sv)
 		case arrow.TIMESTAMP:
 			tv := v.(time.Time)
-			b.(*array.TimestampBuilder).Append(tv)
-		case arrow.DATE:
-			dv := v.(time.Time)
-			b.(*array.DateBuilder).Append(dv)
+			at, err := arrow.TimestampFromTime(tv, b.Type().(*arrow.TimestampType).Unit)
+			if err != nil {
+				return err
+			}
+			b.(*array.TimestampBuilder).Append(at)
+		case arrow.DATE32:
+			tv := v.(time.Time)
+			b.(*array.Date32Builder).Append(arrow.Date32FromTime(tv))
+		case arrow.DURATION:
+			sv := v.(string)
+			duration, err := types.Time.ConvertToTimeDuration(sv)
+			if err != nil {
+				return err
+			}
+			b.(*array.DurationBuilder).Append(arrow.Duration(duration.Microseconds()))
+		default:
+			b.AppendValueFromString(fmt.Sprint(v))
 		}
 	}
+	return nil
 }
