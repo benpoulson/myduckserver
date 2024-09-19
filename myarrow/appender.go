@@ -30,6 +30,10 @@ func (a *ArrowAppender) Release() {
 	a.builder.Release()
 }
 
+func (a *ArrowAppender) Build() arrow.Record {
+	return a.builder.NewRecord()
+}
+
 func (a *ArrowAppender) Append(row sql.Row) error {
 	for i, b := range a.builder.Fields() {
 		v := row[i]
