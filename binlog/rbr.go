@@ -21,12 +21,15 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/apache/arrow/go/v17/arrow"
 	"github.com/apache/arrow/go/v17/arrow/array"
+	"github.com/apache/arrow/go/v17/arrow/decimal128"
+	"github.com/apache/arrow/go/v17/arrow/decimal256"
+	"github.com/cockroachdb/apd/v3"
 	"github.com/dolthub/vitess/go/sqltypes"
 	querypb "github.com/dolthub/vitess/go/vt/proto/query"
 	"github.com/dolthub/vitess/go/vt/proto/vtrpc"
@@ -38,6 +41,29 @@ import (
 var ZeroTimestamp = []byte("0000-00-00 00:00:00")
 
 var dig2bytes = []int{0, 1, 1, 2, 2, 3, 3, 4, 4, 4}
+
+var powerOf10s = [20]uint64{
+	1,
+	10,
+	100,
+	1000,
+	10000,
+	1_00000,
+	10_00000,
+	100_00000,
+	1000_00000,
+	10000_00000,
+	1_00000_00000,
+	10_00000_00000,
+	100_00000_00000,
+	1000_00000_00000,
+	10000_00000_00000,
+	1_00000_00000_00000,
+	10_00000_00000_00000,
+	100_00000_00000_00000,
+	1000_00000_00000_00000,
+	10000_00000_00000_00000,
+}
 
 // CellLength returns the new position after the field with the given
 // type is read.
@@ -524,24 +550,29 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, ftype querypb.Ty
 		frac0 := scale / 9              // number of 32 bits fractionals
 		frac0x := scale - frac0*9       // leftover fractionals
 
-		l := min(40, intg0*4+dig2bytes[intg0x]+frac0*4+dig2bytes[frac0x])
+		l := intg0*4 + dig2bytes[intg0x] + frac0*4 + dig2bytes[frac0x]
 
 		// Copy the data so we can change it. Otherwise
 		// decoding is just too hard.
-		d := make([]byte, l)
+		// Using a constant capacity to ensure stack allocation:
+		//   https://github.com/golang/go/issues/27625
+		d := make([]byte, l, 40)
 		copy(d, data[pos:pos+l])
 
-		txt := &bytes.Buffer{}
+		// txt := &bytes.Buffer{}
 
 		isNegative := (d[0] & 0x80) == 0
 		d[0] ^= 0x80 // First bit is inverted.
 		if isNegative {
 			// Negative numbers are just inverted bytes.
-			txt.WriteByte('-')
+			// txt.WriteByte('-')
 			for i := range d {
 				d[i] ^= 0xff
 			}
 		}
+
+		// the initial 128 bits are stack-allocated
+		var coeff apd.BigInt
 
 		// first we have the leftover full digits
 		var val uint32
@@ -569,13 +600,20 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, ftype querypb.Ty
 		}
 		pos = dig2bytes[intg0x]
 		if val > 0 {
-			txt.Write(strconv.AppendUint(nil, uint64(val), 10))
+			// txt.Write(strconv.AppendUint(nil, uint64(val), 10))
+			coeff.SetUint64(uint64(val))
 		}
+
+		var multiplier, tmp apd.BigInt
+		multiplier.SetUint64(1_000_000_000) // 9 digits
 
 		// now the full digits, 32 bits each, 9 digits
 		for range intg0 {
 			val = binary.BigEndian.Uint32(d[pos : pos+4])
-			fmt.Fprintf(txt, "%09d", val)
+			// fmt.Fprintf(txt, "%09d", val)
+			tmp.SetUint64(uint64(val))
+			coeff.Mul(&coeff, &multiplier)
+			coeff.Add(&coeff, &tmp)
 			pos += 4
 		}
 
@@ -585,19 +623,44 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, ftype querypb.Ty
 			// DECIMAL(5,0), a binlogged value of 0 is almost treated
 			// like the NULL byte and we get a 0 byte length value.
 			// In this case let's return the correct value of 0.
-			if txt.Len() == 0 {
-				txt.WriteRune('0')
-			}
+			// if txt.Len() == 0 {
+			// 	txt.WriteRune('0')
+			// }
 
-			err := builder.AppendValueFromString(txt.String())
-			return l, err
+			// keep stack-allocated if possible
+			var bi big.Int
+			bi.SetBits(coeff.Bits())
+
+			switch b := builder.(type) {
+			case *array.Decimal128Builder:
+				num := decimal128.FromBigInt(&bi)
+				if isNegative {
+					num = num.Negate()
+				}
+				b.Append(num)
+			case *array.Decimal256Builder:
+				num := decimal256.FromBigInt(&bi)
+				if isNegative {
+					num = num.Negate()
+				}
+				b.Append(num)
+			default:
+				return l, vterrors.Errorf(vtrpc.Code_INTERNAL, "unexpected Arrow builder type: %T", builder)
+			}
+			return l, nil
 		}
-		txt.WriteByte('.')
+
+		// txt.WriteByte('.')
+		fp := 0
 
 		// now the full fractional digits
 		for range frac0 {
 			val = binary.BigEndian.Uint32(d[pos : pos+4])
-			fmt.Fprintf(txt, "%09d", val)
+			// fmt.Fprintf(txt, "%09d", val)
+			tmp.SetUint64(uint64(val))
+			coeff.Mul(&coeff, &multiplier)
+			coeff.Add(&coeff, &tmp)
+			fp += 9
 			pos += 4
 		}
 
@@ -605,24 +668,39 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, ftype querypb.Ty
 		switch dig2bytes[frac0x] {
 		case 0:
 			// Nothing to do
-			err := builder.AppendValueFromString(txt.String())
-			return l, err
+			break
 		case 1:
 			// one byte, 1 or 2 digits
 			val = uint32(d[pos])
 			if frac0x == 1 {
-				fmt.Fprintf(txt, "%1d", val)
+				// fmt.Fprintf(txt, "%1d", val)
+				multiplier.SetUint64(10)
+				tmp.SetUint64(uint64(val))
+				coeff.Mul(&coeff, &multiplier)
+				coeff.Add(&coeff, &tmp)
 			} else {
-				fmt.Fprintf(txt, "%02d", val)
+				// fmt.Fprintf(txt, "%02d", val)
+				multiplier.SetUint64(100)
+				tmp.SetUint64(uint64(val))
+				coeff.Mul(&coeff, &multiplier)
+				coeff.Add(&coeff, &tmp)
 			}
 		case 2:
 			// two bytes, 3 or 4 digits
 			val = uint32(d[pos])<<8 +
 				uint32(d[pos+1])
 			if frac0x == 3 {
-				fmt.Fprintf(txt, "%03d", val)
+				// fmt.Fprintf(txt, "%03d", val)
+				multiplier.SetUint64(1_000)
+				tmp.SetUint64(uint64(val))
+				coeff.Mul(&coeff, &multiplier)
+				coeff.Add(&coeff, &tmp)
 			} else {
-				fmt.Fprintf(txt, "%04d", val)
+				// fmt.Fprintf(txt, "%04d", val)
+				multiplier.SetUint64(10_000)
+				tmp.SetUint64(uint64(val))
+				coeff.Mul(&coeff, &multiplier)
+				coeff.Add(&coeff, &tmp)
 			}
 		case 3:
 			// 3 bytes, 5 or 6 digits
@@ -630,9 +708,17 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, ftype querypb.Ty
 				uint32(d[pos+1])<<8 +
 				uint32(d[pos+2])
 			if frac0x == 5 {
-				fmt.Fprintf(txt, "%05d", val)
+				// fmt.Fprintf(txt, "%05d", val)
+				multiplier.SetUint64(100_000)
+				tmp.SetUint64(uint64(val))
+				coeff.Mul(&coeff, &multiplier)
+				coeff.Add(&coeff, &tmp)
 			} else {
-				fmt.Fprintf(txt, "%06d", val)
+				// fmt.Fprintf(txt, "%06d", val)
+				multiplier.SetUint64(1_000_000)
+				tmp.SetUint64(uint64(val))
+				coeff.Mul(&coeff, &multiplier)
+				coeff.Add(&coeff, &tmp)
 			}
 		case 4:
 			// 4 bytes, 7 or 8 digits (9 digits would be a full)
@@ -641,28 +727,60 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, ftype querypb.Ty
 				uint32(d[pos+2])<<8 +
 				uint32(d[pos+3])
 			if frac0x == 7 {
-				fmt.Fprintf(txt, "%07d", val)
+				// fmt.Fprintf(txt, "%07d", val)
+				multiplier.SetUint64(10_000_000)
+				tmp.SetUint64(uint64(val))
+				coeff.Mul(&coeff, &multiplier)
+				coeff.Add(&coeff, &tmp)
 			} else {
-				fmt.Fprintf(txt, "%08d", val)
+				// fmt.Fprintf(txt, "%08d", val)
+				multiplier.SetUint64(100_000_000)
+				tmp.SetUint64(uint64(val))
+				coeff.Mul(&coeff, &multiplier)
+				coeff.Add(&coeff, &tmp)
 			}
+		}
+		fp += frac0x
+
+		// Pad with zero digits if necessary:
+		// the arrow array shares a common scale for all values,
+		// so we need to ensure that the number of fractional digits is as expected.
+		desired := int(builder.Type().(arrow.DecimalType).GetScale())
+		if fp < desired {
+			// Pad 19 zero digits at a time
+			multiplier.SetUint64(10000_00000_00000_00000)
+			for fp+19 < desired {
+				coeff.Mul(&coeff, &multiplier)
+				fp += 19
+			}
+			// Add the remaining zero digits
+			multiplier.SetUint64(powerOf10s[desired-fp])
+			coeff.Mul(&coeff, &multiplier)
+			fp = desired
+		} else if fp > desired {
+			return l, vterrors.Errorf(vtrpc.Code_INTERNAL, "unexpected fractional digits: %v > %v", fp, desired)
 		}
 
-		// remove preceding 0s from the integral part, otherwise we get "000000000001.23" instead of "1.23"
-		trimPrecedingZeroes := func(b []byte) []byte {
-			s := string(b)
-			isNegative := false
-			if s[0] == '-' {
-				isNegative = true
-				s = s[1:]
-			}
-			s = strings.TrimLeft(s, "0")
+		// keep stack-allocated if possible
+		var bi big.Int
+		bi.SetBits(coeff.Bits())
+		switch b := builder.(type) {
+		case *array.Decimal128Builder:
+			num := decimal128.FromBigInt(&bi)
 			if isNegative {
-				s = fmt.Sprintf("-%s", s)
+				num = num.Negate()
 			}
-			return []byte(s)
+			b.Append(num)
+		case *array.Decimal256Builder:
+			num := decimal256.FromBigInt(&bi)
+			if isNegative {
+				num = num.Negate()
+			}
+			b.Append(num)
+		default:
+			return l, vterrors.Errorf(vtrpc.Code_INTERNAL, "unexpected Arrow builder type: %T", builder)
 		}
-		err := builder.AppendValueFromString(string(trimPrecedingZeroes(txt.Bytes())))
-		return l, err
+		return l, nil
 
 	case TypeEnum:
 		switch metadata & 0xff {
