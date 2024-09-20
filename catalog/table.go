@@ -187,7 +187,8 @@ func (t *Table) AddColumn(ctx *sql.Context, column *sql.Column, order *sql.Colum
 	}
 
 	// add comment
-	comment := NewCommentWithMeta(column.Comment, MetaData{typ.mysql, columnDefault})
+	typ.mysql.Default = columnDefault
+	comment := NewCommentWithMeta(column.Comment, typ.mysql)
 	sql += fmt.Sprintf(`; COMMENT ON COLUMN %s IS '%s'`, FullColumnName(t.db.catalog, t.db.name, t.name, column.Name), comment.Encode())
 
 	_, err = adapter.ExecContext(ctx, sql)
@@ -247,7 +248,8 @@ func (t *Table) ModifyColumn(ctx *sql.Context, columnName string, column *sql.Co
 	}
 
 	// alter comment
-	comment := NewCommentWithMeta(column.Comment, MetaData{typ.mysql, columnDefault})
+	typ.mysql.Default = columnDefault
+	comment := NewCommentWithMeta(column.Comment, typ.mysql)
 	sqls = append(sqls, fmt.Sprintf(`COMMENT ON COLUMN %s IS '%s'`, FullColumnName(t.db.catalog, t.db.name, t.name, column.Name), comment.Encode()))
 
 	joinedSQL := strings.Join(sqls, "; ")
@@ -504,8 +506,8 @@ func queryColumns(ctx *sql.Context, catalogName, schemaName, tableName string) (
 			return nil, err
 		}
 
-		decodedComment := DecodeComment[MetaData](comment.String)
-		dataType := mysqlDataType(AnnotatedDuckType{dataTypes, decodedComment.Meta.Type}, uint8(numericPrecision.Int32), uint8(numericScale.Int32))
+		decodedComment := DecodeComment[MySQLType](comment.String)
+		dataType := mysqlDataType(AnnotatedDuckType{dataTypes, decodedComment.Meta}, uint8(numericPrecision.Int32), uint8(numericScale.Int32))
 
 		columnInfo := &ColumnInfo{
 			ColumnName:    columnName,
