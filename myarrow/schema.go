@@ -85,10 +85,10 @@ func ToArrowType(t sql.Type) arrow.DataType {
 		return arrow.BinaryTypes.String
 	case query.Type_SET:
 		return arrow.BinaryTypes.String
-	case query.Type_GEOMETRY:
-		return arrow.BinaryTypes.String
 	case query.Type_JSON:
 		return arrow.BinaryTypes.String
+	case query.Type_GEOMETRY:
+		return arrow.BinaryTypes.Binary
 	default:
 		panic("unsupported data type")
 	}

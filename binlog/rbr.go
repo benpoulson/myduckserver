@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"strconv"
 	"time"
 
 	"github.com/apache/arrow/go/v17/arrow"
@@ -30,6 +29,7 @@ import (
 	"github.com/apache/arrow/go/v17/arrow/decimal128"
 	"github.com/apache/arrow/go/v17/arrow/decimal256"
 	"github.com/cockroachdb/apd/v3"
+	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/vitess/go/sqltypes"
 	querypb "github.com/dolthub/vitess/go/vt/proto/query"
 	"github.com/dolthub/vitess/go/vt/proto/vtrpc"
@@ -205,7 +205,8 @@ func printTimestamp(v uint32) *bytes.Buffer {
 // byte to determine general shared aspects of types and the querypb.Field to
 // determine other info specifically about its underlying column (SQL column
 // type, column length, charset, etc)
-func CellValue(data []byte, pos int, typ byte, metadata uint16, ftype querypb.Type, builder array.Builder) (int, error) {
+func CellValue(data []byte, pos int, typ byte, metadata uint16, column *sql.Column, builder array.Builder) (int, error) {
+	ftype := column.Type.Type()
 	switch typ {
 	case TypeTiny:
 		if sqltypes.IsSigned(ftype) {
@@ -783,24 +784,37 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, ftype querypb.Ty
 		return l, nil
 
 	case TypeEnum:
-		switch metadata & 0xff {
+		var idx int
+		l := int(metadata & 0xff)
+		switch l {
 		case 1:
 			// One byte storage.
-			return sqltypes.MakeTrusted(querypb.Type_ENUM,
-				strconv.AppendUint(nil, uint64(data[pos]), 10)), 1, nil
+			idx = int(data[pos])
 		case 2:
 			// Two bytes storage.
-			val := binary.LittleEndian.Uint16(data[pos : pos+2])
-			return sqltypes.MakeTrusted(querypb.Type_ENUM,
-				strconv.AppendUint(nil, uint64(val), 10)), 2, nil
+			idx = int(binary.LittleEndian.Uint16(data[pos : pos+2]))
 		default:
-			return sqltypes.NULL, 0, vterrors.Errorf(vtrpc.Code_INTERNAL, "unexpected enum size: %v", metadata&0xff)
+			return 0, vterrors.Errorf(vtrpc.Code_INTERNAL, "unexpected enum size: %v", metadata&0xff)
 		}
+		val, ok := column.Type.(sql.EnumType).At(idx)
+		if !ok {
+			return l, vterrors.Errorf(vtrpc.Code_INTERNAL, "enum value %v not found in %v", idx, column.Type)
+		}
+		builder.(*array.StringBuilder).Append(val)
+		return l, nil
 
 	case TypeSet:
 		l := int(metadata & 0xff)
-		return sqltypes.MakeTrusted(querypb.Type_SET,
-			data[pos:pos+l]), l, nil
+		var val uint64
+		for i := range l {
+			val += uint64(data[pos+i]) << (uint(i) * 8)
+		}
+		s, err := column.Type.(sql.SetType).BitsToString(val)
+		if err != nil {
+			return l, vterrors.Errorf(vtrpc.Code_INTERNAL, "invalid bit value %x for set %v", val, column.Type)
+		}
+		builder.(*array.StringBuilder).Append(s)
+		return l, nil
 
 	case TypeJSON, TypeTinyBlob, TypeMediumBlob, TypeLongBlob, TypeBlob, TypeVector:
 		// Only TypeBlob and TypeVector is used in binary logs,
@@ -822,7 +836,7 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, ftype querypb.Ty
 				uint32(data[pos+2])<<16 |
 				uint32(data[pos+3])<<24)
 		default:
-			return sqltypes.NULL, 0, vterrors.Errorf(vtrpc.Code_INTERNAL, "unsupported blob metadata value %v (data: %v pos: %v)", metadata, data, pos)
+			return 0, vterrors.Errorf(vtrpc.Code_INTERNAL, "unsupported blob metadata value %v (data: %v pos: %v)", metadata, data, pos)
 		}
 		pos += int(metadata)
 
@@ -834,13 +848,15 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, ftype querypb.Ty
 			if err != nil {
 				panic(err)
 			}
+			// TODO(fan): Use a buffer passed in from the caller.
 			d := jsonVal.MarshalTo(nil)
-			return sqltypes.MakeTrusted(sqltypes.Expression,
-				d), l + int(metadata), nil
+			builder.(*array.StringBuilder).BinaryBuilder.Append(d)
+			return l + int(metadata), nil
 		}
 
-		return sqltypes.MakeTrusted(querypb.Type_VARBINARY,
-			data[pos:pos+l]), l + int(metadata), nil
+		// For blobs, we just copy the bytes.
+		builder.(*array.BinaryBuilder).Append(data[pos : pos+l])
+		return l + int(metadata), nil
 
 	case TypeString:
 		// This may do String, Enum, and Set. The type is in
@@ -849,19 +865,24 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, ftype querypb.Ty
 		if t == TypeEnum {
 			// We don't know the string values. So just use the
 			// numbers.
+			l := int(metadata & 0xff)
+			var idx int
 			switch metadata & 0xff {
 			case 1:
 				// One byte storage.
-				return sqltypes.MakeTrusted(querypb.Type_UINT8,
-					strconv.AppendUint(nil, uint64(data[pos]), 10)), 1, nil
+				idx = int(data[pos])
 			case 2:
 				// Two bytes storage.
-				val := binary.LittleEndian.Uint16(data[pos : pos+2])
-				return sqltypes.MakeTrusted(querypb.Type_UINT16,
-					strconv.AppendUint(nil, uint64(val), 10)), 2, nil
+				idx = int(binary.LittleEndian.Uint16(data[pos : pos+2]))
 			default:
-				return sqltypes.NULL, 0, vterrors.Errorf(vtrpc.Code_INTERNAL, "unexpected enum size: %v", metadata&0xff)
+				return 0, vterrors.Errorf(vtrpc.Code_INTERNAL, "unexpected enum size: %v", metadata&0xff)
 			}
+			str, ok := column.Type.(sql.EnumType).At(idx)
+			if !ok {
+				return l, vterrors.Errorf(vtrpc.Code_INTERNAL, "enum value %v not found in %v", data[pos], column.Type)
+			}
+			builder.(*array.StringBuilder).Append(str)
+			return l, nil
 		}
 		if t == TypeSet {
 			// We don't know the set values. So just use the
@@ -871,8 +892,12 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, ftype querypb.Ty
 			for i := range l {
 				val += uint64(data[pos+i]) << (uint(i) * 8)
 			}
-			return sqltypes.MakeTrusted(querypb.Type_UINT64,
-				strconv.AppendUint(nil, uint64(val), 10)), l, nil
+			str, err := column.Type.(sql.SetType).BitsToString(val)
+			if err != nil {
+				return l, vterrors.Errorf(vtrpc.Code_INTERNAL, "invalid bit value %x for set %v", val, column.Type)
+			}
+			builder.(*array.StringBuilder).Append(str)
+			return l, nil
 		}
 		// This is a real string. The length is weird.
 		max := int((((metadata >> 4) & 0x300) ^ 0x300) + (metadata & 0xff))
@@ -884,8 +909,8 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, ftype querypb.Ty
 			// apply to BINARY data.
 			l := int(uint64(data[pos]) |
 				uint64(data[pos+1])<<8)
-			return sqltypes.MakeTrusted(querypb.Type_VARCHAR,
-				data[pos+2:pos+2+l]), l + 2, nil
+			builder.(*array.StringBuilder).BinaryBuilder.Append(data[pos+2 : pos+2+l])
+			return l + 2, nil
 		}
 		l := int(data[pos])
 		mdata := data[pos+1 : pos+1+l]
@@ -904,9 +929,11 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, ftype querypb.Ty
 				copy(paddedData[:l], mdata)
 				mdata = paddedData
 			}
-			return sqltypes.MakeTrusted(querypb.Type_BINARY, mdata), l + 1, nil
+			builder.(*array.BinaryBuilder).Append(mdata)
+			return l + 1, nil
 		}
-		return sqltypes.MakeTrusted(querypb.Type_VARCHAR, mdata), l + 1, nil
+		builder.(*array.StringBuilder).BinaryBuilder.Append(mdata)
+		return l + 1, nil
 
 	case TypeGeometry:
 		l := 0
@@ -926,13 +953,13 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, ftype querypb.Ty
 				uint32(data[pos+2])<<16 |
 				uint32(data[pos+3])<<24)
 		default:
-			return sqltypes.NULL, 0, vterrors.Errorf(vtrpc.Code_INTERNAL, "unsupported geometry metadata value %v (data: %v pos: %v)", metadata, data, pos)
+			return 0, vterrors.Errorf(vtrpc.Code_INTERNAL, "unsupported geometry metadata value %v (data: %v pos: %v)", metadata, data, pos)
 		}
 		pos += int(metadata)
-		return sqltypes.MakeTrusted(querypb.Type_GEOMETRY,
-			data[pos:pos+l]), l + int(metadata), nil
+		builder.(*array.BinaryBuilder).Append(data[pos : pos+l])
+		return l + int(metadata), nil
 
 	default:
-		return sqltypes.NULL, 0, vterrors.Errorf(vtrpc.Code_INTERNAL, "unsupported type %v", typ)
+		return 0, vterrors.Errorf(vtrpc.Code_INTERNAL, "unsupported type %v", typ)
 	}
 }
