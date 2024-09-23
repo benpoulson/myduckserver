@@ -13,28 +13,36 @@ import (
 )
 
 type ArrowAppender struct {
-	mysqlSchema sql.Schema
-	builder     *array.RecordBuilder
+	schema  sql.Schema
+	builder *array.RecordBuilder
 }
 
-func NewArrowAppender(mysqlSchema sql.Schema) *ArrowAppender {
+func NewArrowAppender(schema sql.Schema) (ArrowAppender, error) {
 	pool := memory.NewGoAllocator()
-	arrowSchema := ToArrowSchema(mysqlSchema)
-	return &ArrowAppender{
-		mysqlSchema: mysqlSchema,
-		builder:     array.NewRecordBuilder(pool, arrowSchema),
+	arrowSchema, err := ToArrowSchema(schema)
+	if err != nil {
+		return ArrowAppender{}, err
 	}
+	return ArrowAppender{schema, array.NewRecordBuilder(pool, arrowSchema)}, nil
 }
 
-func (a *ArrowAppender) Release() {
+func (a ArrowAppender) Release() {
 	a.builder.Release()
 }
 
-func (a *ArrowAppender) Build() arrow.Record {
+func (a ArrowAppender) Build() arrow.Record {
 	return a.builder.NewRecord()
 }
 
-func (a *ArrowAppender) Append(row sql.Row) error {
+func (a ArrowAppender) MySQLSchema() sql.Schema {
+	return a.schema
+}
+
+func (a ArrowAppender) Field(i int) array.Builder {
+	return a.builder.Field(i)
+}
+
+func (a ArrowAppender) Append(row sql.Row) error {
 	for i, b := range a.builder.Fields() {
 		v := row[i]
 		if v == nil {

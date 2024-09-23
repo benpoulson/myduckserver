@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -8,8 +9,10 @@ import (
 	"sync"
 
 	stdsql "database/sql"
+	"database/sql/driver"
 
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/marcboeker/go-duckdb"
 	_ "github.com/marcboeker/go-duckdb"
 
 	"github.com/apecloud/myduckserver/adapter"
@@ -18,6 +21,7 @@ import (
 
 type DatabaseProvider struct {
 	mu                        *sync.RWMutex
+	connector                 *duckdb.Connector
 	storage                   *stdsql.DB
 	catalogName               string
 	dataDir                   string
@@ -49,24 +53,29 @@ func NewDBProvider(dataDir, dbFile string) (*DatabaseProvider, error) {
 		dsn = filepath.Join(dataDir, dbFile)
 	}
 
-	storage, err := stdsql.Open("duckdb", dsn)
+	connector, err := duckdb.NewConnector(dsn, func(execer driver.ExecerContext) error {
+		// install & load the json extension
+		bootQueries := []string{
+			"INSTALL json",
+			"LOAD json",
+		}
+
+		for _, query := range bootQueries {
+			if _, err := execer.ExecContext(context.Background(), query, nil); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	// install the json extension
-	_, err = storage.Exec("INSTALL json")
-	if err != nil {
-		return nil, err
-	}
-	// load the json extension
-	_, err = storage.Exec("LOAD json")
-	if err != nil {
-		return nil, err
-	}
+	storage := stdsql.OpenDB(connector)
 
 	return &DatabaseProvider{
 		mu:                        &sync.RWMutex{},
+		connector:                 connector,
 		storage:                   storage,
 		catalogName:               name,
 		dataDir:                   dataDir,
@@ -75,7 +84,12 @@ func NewDBProvider(dataDir, dbFile string) (*DatabaseProvider, error) {
 }
 
 func (prov *DatabaseProvider) Close() error {
+	defer prov.connector.Close()
 	return prov.storage.Close()
+}
+
+func (prov *DatabaseProvider) Connector() *duckdb.Connector {
+	return prov.connector
 }
 
 func (prov *DatabaseProvider) Storage() *stdsql.DB {

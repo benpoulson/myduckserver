@@ -1,6 +1,7 @@
 package binlogreplication
 
 import (
+	"github.com/apecloud/myduckserver/myarrow"
 	sqle "github.com/dolthub/go-mysql-server"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/vitess/go/mysql"
@@ -32,4 +33,11 @@ type TableWriterProvider interface {
 		eventType EventType,
 		foreignKeyChecksDisabled bool,
 	) (TableWriter, error)
+
+	// GetDeltaAppender returns an ArrowAppender for appending updates to the specified |table| in the specified |database|.
+	GetDeltaAppender(
+		ctx *sql.Context, engine *sqle.Engine,
+		databaseName, tableName string,
+		schema sql.Schema,
+	) (*myarrow.ArrowAppender, error)
 }

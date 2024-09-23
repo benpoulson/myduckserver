@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package main
+package replica
 
 import (
 	"context"
@@ -29,11 +29,12 @@ import (
 	"github.com/apecloud/myduckserver/backend"
 	"github.com/apecloud/myduckserver/binlogreplication"
 	"github.com/apecloud/myduckserver/catalog"
+	"github.com/apecloud/myduckserver/myarrow"
 )
 
 // registerReplicaController registers the replica controller into the engine
 // to handle the replication commands, such as START REPLICA, STOP REPLICA, etc.
-func registerReplicaController(provider *catalog.DatabaseProvider, engine *sqle.Engine, pool *backend.ConnectionPool) {
+func RegisterReplicaController(provider *catalog.DatabaseProvider, engine *sqle.Engine, pool *backend.ConnectionPool) {
 	replica := binlogreplication.MyBinlogReplicaController
 	replica.SetEngine(engine)
 
@@ -42,7 +43,7 @@ func registerReplicaController(provider *catalog.DatabaseProvider, engine *sqle.
 	ctx.SetCurrentDatabase("mysql")
 	replica.SetExecutionContext(ctx)
 
-	replica.SetTableWriterProvider(&tableWriterProvider{pool})
+	replica.SetTableWriterProvider(&tableWriterProvider{pool: pool})
 
 	engine.Analyzer.Catalog.BinlogReplicaController = binlogreplication.MyBinlogReplicaController
 
@@ -53,7 +54,8 @@ func registerReplicaController(provider *catalog.DatabaseProvider, engine *sqle.
 }
 
 type tableWriterProvider struct {
-	pool *backend.ConnectionPool
+	pool  *backend.ConnectionPool
+	delta DeltaController
 }
 
 var _ binlogreplication.TableWriterProvider = &tableWriterProvider{}
@@ -73,15 +75,20 @@ func (twp *tableWriterProvider) GetTableWriter(
 	return twp.newTableUpdater(ctx, databaseName, tableName, schema, columnCount, rowCount, identifyColumns, dataColumns, eventType)
 }
 
+func (twp *tableWriterProvider) GetDeltaAppender(
+	ctx *sql.Context, engine *sqle.Engine,
+	databaseName, tableName string,
+	schema sql.Schema,
+) (*myarrow.ArrowAppender, error) {
+	return twp.delta.GetDeltaAppender(databaseName, tableName, schema)
+}
+
 func (twp *tableWriterProvider) newTableAppender(
 	ctx *sql.Context,
 	databaseName, tableName string,
 	columnCount int,
 ) (*tableAppender, error) {
-	connector, err := duckdb.NewConnector(dbFilePath, nil)
-	if err != nil {
-		return nil, err
-	}
+	connector := twp.pool.Connector()
 	conn, err := connector.Connect(ctx.Context)
 	if err != nil {
 		connector.Close()

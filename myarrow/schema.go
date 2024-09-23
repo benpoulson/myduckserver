@@ -6,20 +6,32 @@ import (
 	"github.com/dolthub/vitess/go/vt/proto/query"
 )
 
-func ToArrowSchema(s sql.Schema) *arrow.Schema {
+func ToArrowSchema(s sql.Schema) (*arrow.Schema, error) {
 	fields := make([]arrow.Field, len(s))
 	for i, col := range s {
+		at, err := ToArrowType(col.Type)
+		if err != nil {
+			return nil, err
+		}
 		fields[i] = arrow.Field{
 			Name:     col.Name,
-			Type:     ToArrowType(col.Type),
+			Type:     at,
 			Nullable: col.Nullable,
 		}
 	}
-	return arrow.NewSchema(fields, nil)
+	return arrow.NewSchema(fields, nil), nil
 }
 
 // ToArrowType translates the MySQL Type to Arrow Type.
-func ToArrowType(t sql.Type) arrow.DataType {
+func ToArrowType(t sql.Type) (arrow.DataType, error) {
+	at := toArrowType(t)
+	if at == nil {
+		return nil, sql.ErrInvalidType.New(t)
+	}
+	return at, nil
+}
+
+func toArrowType(t sql.Type) arrow.DataType {
 	switch t.Type() {
 	case query.Type_UINT8:
 		return arrow.PrimitiveTypes.Uint8

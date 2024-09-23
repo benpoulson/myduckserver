@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/apecloud/myduckserver/binlog"
 	"github.com/apecloud/myduckserver/charset"
 	gms "github.com/dolthub/go-mysql-server"
 	"github.com/dolthub/go-mysql-server/sql"
@@ -626,17 +627,49 @@ func (a *binlogReplicaApplier) processRowEvent(ctx *sql.Context, event mysql.Bin
 		return err
 	}
 
+	fieldCount := len(schema)
+	if len(tableMap.Types) != fieldCount {
+		return fmt.Errorf("schema mismatch: expected %d fields, got %d from binlog", fieldCount, len(tableMap.Types))
+	}
+
 	var typ EventType
+	var isRowFormat bool // all columns are present
 	switch {
 	case event.IsDeleteRows():
 		typ = DeleteEvent
+		isRowFormat = rows.IdentifyColumns.BitCount() == fieldCount
 		ctx.GetLogger().Tracef(" - Deleted Rows (table: %s)", tableMap.Name)
 	case event.IsUpdateRows():
 		typ = UpdateEvent
+		isRowFormat = rows.IdentifyColumns.BitCount() == fieldCount && rows.DataColumns.BitCount() == fieldCount
 		ctx.GetLogger().Tracef(" - Updated Rows (table: %s)", tableMap.Name)
 	case event.IsWriteRows():
 		typ = InsertEvent
+		isRowFormat = rows.DataColumns.BitCount() == fieldCount
 		ctx.GetLogger().Tracef(" - Inserted Rows (table: %s)", tableMap.Name)
+	}
+
+	if isRowFormat {
+		arrowAppender, err := a.tableWriterProvider.GetDeltaAppender(ctx, engine, tableMap.Database, tableName, schema)
+		if err != nil {
+			return err
+		}
+		for _, row := range rows.Rows {
+			pos := 0
+			for i := range fieldCount {
+				builder := arrowAppender.Field(i)
+				if row.NullIdentifyColumns.Bit(i) {
+					builder.AppendNull()
+				} else {
+					length, err := binlog.CellValue(row.Identify, pos, tableMap.Types[i], tableMap.Metadata[i], schema[i], builder)
+					if err != nil {
+						return err
+					}
+					pos += length
+				}
+			}
+		}
+		return nil
 	}
 
 	tableWriter, err := a.tableWriterProvider.GetTableWriter(
