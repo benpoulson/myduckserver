@@ -28,6 +28,7 @@ import (
 	"github.com/apache/arrow/go/v17/arrow/array"
 	"github.com/apache/arrow/go/v17/arrow/decimal128"
 	"github.com/apache/arrow/go/v17/arrow/decimal256"
+	"github.com/apecloud/myduckserver/charset"
 	"github.com/cockroachdb/apd/v3"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/vitess/go/sqltypes"
@@ -481,7 +482,7 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, column *sql.Colu
 		mul := 0
 		switch metadata {
 		case 1:
-			frac := int(data[pos+3])
+			frac = int(data[pos+3])
 			if sign == -1 && frac != 0 {
 				hms--
 				frac = 0x100 - frac
@@ -489,14 +490,14 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, column *sql.Colu
 			frac /= 10
 			mul = 100000
 		case 2:
-			frac := int(data[pos+3])
+			frac = int(data[pos+3])
 			if sign == -1 && frac != 0 {
 				hms--
 				frac = 0x100 - frac
 			}
 			mul = 10000
 		case 3:
-			frac := int(data[pos+3])<<8 |
+			frac = int(data[pos+3])<<8 |
 				int(data[pos+4])
 			if sign == -1 && frac != 0 {
 				hms--
@@ -505,7 +506,7 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, column *sql.Colu
 			frac /= 10
 			mul = 1000
 		case 4:
-			frac := int(data[pos+3])<<8 |
+			frac = int(data[pos+3])<<8 |
 				int(data[pos+4])
 			if sign == -1 && frac != 0 {
 				hms--
@@ -513,7 +514,7 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, column *sql.Colu
 			}
 			mul = 100
 		case 5:
-			frac := int(data[pos+3])<<16 |
+			frac = int(data[pos+3])<<16 |
 				int(data[pos+4])<<8 |
 				int(data[pos+5])
 			if sign == -1 && frac != 0 {
@@ -523,7 +524,7 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, column *sql.Colu
 			frac /= 10
 			mul = 10
 		case 6:
-			frac := int(data[pos+3])<<16 |
+			frac = int(data[pos+3])<<16 |
 				int(data[pos+4])<<8 |
 				int(data[pos+5])
 			if sign == -1 && frac != 0 {
@@ -909,7 +910,11 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, column *sql.Colu
 			// apply to BINARY data.
 			l := int(uint64(data[pos]) |
 				uint64(data[pos+1])<<8)
-			builder.(*array.StringBuilder).BinaryBuilder.Append(data[pos+2 : pos+2+l])
+			utf8str, err := charset.DecodeBytes(column.Type.(sql.StringType).CharacterSet(), data[pos+2:pos+2+l])
+			if err != nil {
+				return l + 2, vterrors.Errorf(vtrpc.Code_INTERNAL, "failed to decode string: %v", err)
+			}
+			builder.(*array.StringBuilder).BinaryBuilder.Append(utf8str)
 			return l + 2, nil
 		}
 		l := int(data[pos])
@@ -929,10 +934,16 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, column *sql.Colu
 				copy(paddedData[:l], mdata)
 				mdata = paddedData
 			}
-			builder.(*array.BinaryBuilder).Append(mdata)
-			return l + 1, nil
+			if builder, ok := builder.(*array.BinaryBuilder); ok {
+				builder.Append(mdata)
+				return l + 1, nil
+			} // Otherwise, fall through to handle (VAR)CHAR/TEXT columns.
 		}
-		builder.(*array.StringBuilder).BinaryBuilder.Append(mdata)
+		utf8str, err := charset.DecodeBytes(column.Type.(sql.StringType).CharacterSet(), mdata)
+		if err != nil {
+			return l + 1, vterrors.Errorf(vtrpc.Code_INTERNAL, "failed to decode string: %v", err)
+		}
+		builder.(*array.StringBuilder).BinaryBuilder.Append(utf8str)
 		return l + 1, nil
 
 	case TypeGeometry:

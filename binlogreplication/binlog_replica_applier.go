@@ -407,7 +407,7 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 			ctx.SetSessionVariable(ctx, "unique_checks", 1)
 		}
 
-		createCommit = strings.ToLower(query.SQL) != "begin"
+		createCommit = !strings.EqualFold(query.SQL, "begin")
 		// TODO(fan): Disable the transaction for now.
 		if createCommit {
 			if !(query.Database == "mysql" && strings.HasPrefix(query.SQL, "TRUNCATE TABLE")) {
@@ -731,7 +731,7 @@ func parseRow(ctx *sql.Context, engine *gms.Engine, tableMap *mysql.TableMap, sc
 	for i, typ := range tableMap.Types {
 		column := schema[i]
 
-		if columnsPresentBitmap.Bit(i) == false {
+		if !columnsPresentBitmap.Bit(i) {
 			parsedRow = append(parsedRow, nil)
 			continue
 		}
