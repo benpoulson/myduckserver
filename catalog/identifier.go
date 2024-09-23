@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/apecloud/myduckserver/transpiler"
@@ -75,4 +76,24 @@ func ConnectIdentifiersANSI(identifiers ...string) string {
 		identifiers[i] = QuoteIdentifierANSI(id)
 	}
 	return strings.Join(identifiers, ".")
+}
+
+func FormatColumnDefault(defaultValue string) (string, error) {
+
+	parsed, err := sqlparser.Parse(fmt.Sprintf("SELECT %s", defaultValue))
+	if err != nil {
+		return "", err
+	}
+	selectStmt, ok := parsed.(*sqlparser.Select)
+	if !ok {
+		return "", fmt.Errorf("expected SELECT statement, got %T", parsed)
+	}
+	expr := selectStmt.SelectExprs[0].(*sqlparser.AliasedExpr).Expr
+	switch expr := expr.(type) {
+	case *sqlparser.FuncExpr:
+		if expr.Name.Lowered() == "current_timestamp" {
+			return "CURRENT_TIMESTAMP", nil
+		}
+	}
+	return transpiler.NormalizeStrings(defaultValue), nil
 }

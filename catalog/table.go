@@ -182,7 +182,11 @@ func (t *Table) AddColumn(ctx *sql.Context, column *sql.Column, order *sql.Colum
 	}
 
 	if column.Default != nil {
-		sql += fmt.Sprintf(" DEFAULT %s", column.Default.String())
+		columnDefault, err := FormatColumnDefault(column.Default.String())
+		if err != nil {
+			return err
+		}
+		sql += fmt.Sprintf(" DEFAULT %s", columnDefault)
 		typ.mysql.Default = column.Default.String()
 	}
 
@@ -235,7 +239,11 @@ func (t *Table) ModifyColumn(ctx *sql.Context, columnName string, column *sql.Co
 	}
 
 	if column.Default != nil {
-		sqls = append(sqls, fmt.Sprintf(`%s SET DEFAULT %s`, baseSQL, column.Default.String()))
+		columnDefault, err := FormatColumnDefault(column.Default.String())
+		if err != nil {
+			return err
+		}
+		sqls = append(sqls, fmt.Sprintf(`%s SET DEFAULT %s`, baseSQL, columnDefault))
 		typ.mysql.Default = column.Default.String()
 	} else {
 		sqls = append(sqls, fmt.Sprintf(`%s DROP DEFAULT`, baseSQL))
