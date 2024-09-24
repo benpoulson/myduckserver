@@ -29,7 +29,6 @@ import (
 	"github.com/apecloud/myduckserver/backend"
 	"github.com/apecloud/myduckserver/binlogreplication"
 	"github.com/apecloud/myduckserver/catalog"
-	"github.com/apecloud/myduckserver/myarrow"
 )
 
 // registerReplicaController registers the replica controller into the engine
@@ -79,7 +78,7 @@ func (twp *tableWriterProvider) GetDeltaAppender(
 	ctx *sql.Context, engine *sqle.Engine,
 	databaseName, tableName string,
 	schema sql.Schema,
-) (*myarrow.ArrowAppender, error) {
+) (binlogreplication.DeltaAppender, error) {
 	return twp.delta.GetDeltaAppender(databaseName, tableName, schema)
 }
 

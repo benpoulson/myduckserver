@@ -15,6 +15,7 @@
 package binlogreplication
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -411,10 +412,8 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 		createCommit = !strings.EqualFold(query.SQL, "begin")
 		// TODO(fan): Disable the transaction for now.
 		if createCommit {
-			if !(query.Database == "mysql" && strings.HasPrefix(query.SQL, "TRUNCATE TABLE")) {
-				ctx.SetCurrentDatabase(query.Database)
-				executeQueryWithEngine(ctx, engine, query.SQL)
-			}
+			ctx.SetCurrentDatabase(query.Database)
+			executeQueryWithEngine(ctx, engine, query.SQL)
 		}
 
 	case event.IsRotate():
@@ -570,18 +569,18 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 // processRowEvent processes a WriteRows, DeleteRows, or UpdateRows binlog event and returns an error if any problems
 // were encountered.
 func (a *binlogReplicaApplier) processRowEvent(ctx *sql.Context, event mysql.BinlogEvent, engine *gms.Engine) error {
-	var eventType string
+	var eventName string
 	switch {
 	case event.IsDeleteRows():
-		eventType = "DeleteRows"
+		eventName = "DeleteRows"
 	case event.IsWriteRows():
-		eventType = "WriteRows"
+		eventName = "WriteRows"
 	case event.IsUpdateRows():
-		eventType = "UpdateRows"
+		eventName = "UpdateRows"
 	default:
 		return fmt.Errorf("unsupported event type: %v", event)
 	}
-	ctx.GetLogger().Tracef("Received binlog event: %s", eventType)
+	ctx.GetLogger().Tracef("Received binlog event: %s", eventName)
 
 	tableId := event.TableID(*a.format)
 	tableMap, ok := a.tableMapsById[tableId]
@@ -605,7 +604,7 @@ func (a *binlogReplicaApplier) processRowEvent(ctx *sql.Context, event mysql.Bin
 
 	ctx.GetLogger().WithFields(logrus.Fields{
 		"flags": fmt.Sprintf("%x", rows.Flags),
-	}).Tracef("Processing rows from %s event", eventType)
+	}).Tracef("Processing rows from %s event", eventName)
 
 	flags := rows.Flags
 	foreignKeyChecksDisabled := false
@@ -632,53 +631,42 @@ func (a *binlogReplicaApplier) processRowEvent(ctx *sql.Context, event mysql.Bin
 		return fmt.Errorf("schema mismatch: expected %d fields, got %d from binlog", fieldCount, len(tableMap.Types))
 	}
 
-	var typ EventType
+	var eventType EventType
 	var isRowFormat bool // all columns are present
 	switch {
 	case event.IsDeleteRows():
-		typ = DeleteEvent
+		eventType = DeleteEvent
 		isRowFormat = rows.IdentifyColumns.BitCount() == fieldCount
-		ctx.GetLogger().Tracef(" - Deleted Rows (table: %s)", tableMap.Name)
 	case event.IsUpdateRows():
-		typ = UpdateEvent
+		eventType = UpdateEvent
 		isRowFormat = rows.IdentifyColumns.BitCount() == fieldCount && rows.DataColumns.BitCount() == fieldCount
-		ctx.GetLogger().Tracef(" - Updated Rows (table: %s)", tableMap.Name)
 	case event.IsWriteRows():
-		typ = InsertEvent
+		eventType = InsertEvent
 		isRowFormat = rows.DataColumns.BitCount() == fieldCount
-		ctx.GetLogger().Tracef(" - Inserted Rows (table: %s)", tableMap.Name)
 	}
+	ctx.GetLogger().Tracef(" - %s Rows (db: %s, table: %s, row-format: %v)", eventType, tableMap.Database, tableName, isRowFormat)
 
 	if isRowFormat {
-		arrowAppender, err := a.tableWriterProvider.GetDeltaAppender(ctx, engine, tableMap.Database, tableName, schema)
-		if err != nil {
-			return err
-		}
-		for _, row := range rows.Rows {
-			pos := 0
-			for i := range fieldCount {
-				builder := arrowAppender.Field(i)
-				if row.NullIdentifyColumns.Bit(i) {
-					builder.AppendNull()
-				} else {
-					length, err := binlog.CellValue(row.Identify, pos, tableMap.Types[i], tableMap.Metadata[i], schema[i], builder)
-					if err != nil {
-						return err
-					}
-					pos += length
-				}
-			}
-		}
-		return nil
+		// --binlog-format=ROW & --binlog-row-image=full
+		return a.appendRowFormatChanges(ctx, engine, tableMap, tableName, schema, eventType, &rows)
+	} else {
+		return a.writeChanges(ctx, engine, tableMap, tableName, schema, eventType, &rows, foreignKeyChecksDisabled)
 	}
+}
 
+func (a *binlogReplicaApplier) writeChanges(
+	ctx *sql.Context, engine *gms.Engine,
+	tableMap *mysql.TableMap, tableName string, schema sql.Schema,
+	event EventType, rows *mysql.Rows,
+	foreignKeyChecksDisabled bool,
+) error {
 	tableWriter, err := a.tableWriterProvider.GetTableWriter(
 		ctx, engine,
 		tableMap.Database, tableName,
 		schema,
 		len(tableMap.Types), len(rows.Rows),
 		rows.IdentifyColumns, rows.DataColumns,
-		typ,
+		event,
 		foreignKeyChecksDisabled,
 	)
 	if err != nil {
@@ -710,12 +698,12 @@ func (a *binlogReplicaApplier) processRowEvent(ctx *sql.Context, event mysql.Bin
 		dataRows = append(dataRows, dataRow)
 	}
 
-	switch {
-	case event.IsDeleteRows():
+	switch event {
+	case DeleteEvent:
 		err = tableWriter.Delete(ctx, identityRows)
-	case event.IsWriteRows():
+	case InsertEvent:
 		err = tableWriter.Insert(ctx, dataRows)
-	case event.IsUpdateRows():
+	case UpdateEvent:
 		err = tableWriter.Update(ctx, identityRows, dataRows)
 	}
 	if err != nil {
@@ -725,11 +713,123 @@ func (a *binlogReplicaApplier) processRowEvent(ctx *sql.Context, event mysql.Bin
 	ctx.GetLogger().WithFields(logrus.Fields{
 		"db":    tableMap.Database,
 		"table": tableName,
-		"event": eventType,
+		"event": event,
 		"rows":  len(rows.Rows),
 	}).Infoln("processRowEvent")
 
 	return tableWriter.Close()
+}
+
+func (a *binlogReplicaApplier) appendRowFormatChanges(
+	ctx *sql.Context, engine *gms.Engine,
+	tableMap *mysql.TableMap, tableName string, schema sql.Schema,
+	event EventType, rows *mysql.Rows,
+) error {
+	appender, err := a.tableWriterProvider.GetDeltaAppender(ctx, engine, tableMap.Database, tableName, schema)
+	if err != nil {
+		return err
+	}
+
+	var (
+		fields        = appender.Fields()
+		actions       = appender.Action()
+		txnTags       = appender.TxnTag()
+		txnServers    = appender.TxnServer()
+		txnGroups     = appender.TxnGroup()
+		txnSeqNumbers = appender.TxnSeqNumber()
+
+		txnTag    []byte
+		txnServer []byte
+		txnGroup  []byte
+		txnSeq    uint64
+	)
+
+	switch a.currentGtid.Flavor() {
+	case "MySQL56": // mysql56FlavorID
+		// TODO(fan): Add support for GTID tags in MySQL >=8.4
+		gtid := a.currentGtid.(mysql.Mysql56GTID)
+		txnServer = gtid.Server[:]
+		txnSeq = uint64(gtid.Sequence)
+	case "FilePos": // filePosFlavorID, which is not exposed in Dolt's Vitess fork
+		s := a.currentGtid.String()
+		idx := strings.IndexByte(s, ':')
+		if idx == -1 {
+			return fmt.Errorf("invalid GTID: %s", s)
+		}
+		txnGroup = []byte(s[:idx])
+		txnSeq, err = strconv.ParseUint(s[idx+1:], 10, 64)
+		if err != nil {
+			return fmt.Errorf("invalid GTID: %s", s)
+		}
+	case "MariaDB": // mariadbFlavorID
+		gtid := a.currentGtid.(mysql.MariadbGTID)
+		var domain, server [4]byte
+		binary.BigEndian.PutUint32(domain[:], gtid.Domain)
+		binary.BigEndian.PutUint32(server[:], gtid.Server)
+		txnTag = domain[:]
+		txnServer = server[:]
+		txnSeq = gtid.Sequence
+	}
+
+	// The following code is a bit repetitive, but we want to avoid the overhead of function calls for each row.
+
+	// Delete the before image
+	switch event {
+	case DeleteEvent, UpdateEvent:
+		for _, row := range rows.Rows {
+			actions.Append(int8(DeleteEvent))
+			txnTags.Append(txnTag)
+			txnServers.Append(txnServer)
+			txnGroups.Append(txnGroup)
+			txnSeqNumbers.Append(txnSeq)
+
+			pos := 0
+			for i := range schema {
+				builder := fields[i]
+
+				if row.NullIdentifyColumns.Bit(i) {
+					builder.AppendNull()
+					continue
+				}
+
+				length, err := binlog.CellValue(row.Identify, pos, tableMap.Types[i], tableMap.Metadata[i], schema[i], builder)
+				if err != nil {
+					return err
+				}
+				pos += length
+			}
+		}
+	}
+
+	// Insert the after image
+	switch event {
+	case InsertEvent, UpdateEvent:
+		for _, row := range rows.Rows {
+			actions.Append(int8(DeleteEvent))
+			txnTags.Append(txnTag)
+			txnServers.Append(txnServer)
+			txnGroups.Append(txnGroup)
+			txnSeqNumbers.Append(txnSeq)
+
+			pos := 0
+			for i := range schema {
+				builder := appender.Field(i)
+
+				if row.NullColumns.Bit(i) {
+					builder.AppendNull()
+					continue
+				}
+
+				length, err := binlog.CellValue(row.Data, pos, tableMap.Types[i], tableMap.Metadata[i], schema[i], builder)
+				if err != nil {
+					return err
+				}
+				pos += length
+			}
+		}
+	}
+
+	return nil
 }
 
 //

@@ -6,7 +6,7 @@ import (
 	"github.com/dolthub/vitess/go/vt/proto/query"
 )
 
-func ToArrowSchema(s sql.Schema) (*arrow.Schema, error) {
+func ToArrowSchema(s sql.Schema, dictionary ...int) (*arrow.Schema, error) {
 	fields := make([]arrow.Field, len(s))
 	for i, col := range s {
 		at, err := ToArrowType(col.Type)
@@ -17,6 +17,12 @@ func ToArrowSchema(s sql.Schema) (*arrow.Schema, error) {
 			Name:     col.Name,
 			Type:     at,
 			Nullable: col.Nullable,
+		}
+	}
+	for _, i := range dictionary {
+		fields[i].Type = &arrow.DictionaryType{
+			IndexType: arrow.PrimitiveTypes.Uint32,
+			ValueType: fields[i].Type,
 		}
 	}
 	return arrow.NewSchema(fields, nil), nil

@@ -13,37 +13,24 @@ import (
 )
 
 type ArrowAppender struct {
-	schema  sql.Schema
-	builder *array.RecordBuilder
+	*array.RecordBuilder
 }
 
-func NewArrowAppender(schema sql.Schema) (ArrowAppender, error) {
+func NewArrowAppender(schema sql.Schema, dictionary ...int) (ArrowAppender, error) {
 	pool := memory.NewGoAllocator()
-	arrowSchema, err := ToArrowSchema(schema)
+	arrowSchema, err := ToArrowSchema(schema, dictionary...)
 	if err != nil {
 		return ArrowAppender{}, err
 	}
-	return ArrowAppender{schema, array.NewRecordBuilder(pool, arrowSchema)}, nil
+	return ArrowAppender{array.NewRecordBuilder(pool, arrowSchema)}, nil
 }
 
-func (a ArrowAppender) Release() {
-	a.builder.Release()
+func (a *ArrowAppender) Build() arrow.Record {
+	return a.RecordBuilder.NewRecord()
 }
 
-func (a ArrowAppender) Build() arrow.Record {
-	return a.builder.NewRecord()
-}
-
-func (a ArrowAppender) MySQLSchema() sql.Schema {
-	return a.schema
-}
-
-func (a ArrowAppender) Field(i int) array.Builder {
-	return a.builder.Field(i)
-}
-
-func (a ArrowAppender) Append(row sql.Row) error {
-	for i, b := range a.builder.Fields() {
+func (a *ArrowAppender) Append(row sql.Row) error {
+	for i, b := range a.RecordBuilder.Fields() {
 		v := row[i]
 		if v == nil {
 			b.AppendNull()
@@ -76,8 +63,7 @@ func (a ArrowAppender) Append(row sql.Row) error {
 			b.(*array.BinaryBuilder).Append(v.([]byte))
 		case arrow.DECIMAL:
 			dv := v.(decimal.Decimal)
-			sv := dv.String()
-			b.AppendValueFromString(sv)
+			b.AppendValueFromString(dv.String())
 		case arrow.TIMESTAMP:
 			tv := v.(time.Time)
 			at, err := arrow.TimestampFromTime(tv, b.Type().(*arrow.TimestampType).Unit)
@@ -95,6 +81,15 @@ func (a ArrowAppender) Append(row sql.Row) error {
 				return err
 			}
 			b.(*array.DurationBuilder).Append(arrow.Duration(duration.Microseconds()))
+		case arrow.DICTIONARY:
+			switch v := v.(type) {
+			case string:
+				b.(*array.BinaryDictionaryBuilder).AppendString(v)
+			case []byte:
+				b.(*array.BinaryDictionaryBuilder).Append(v)
+			default:
+				b.AppendValueFromString(fmt.Sprint(v))
+			}
 		default:
 			b.AppendValueFromString(fmt.Sprint(v))
 		}
