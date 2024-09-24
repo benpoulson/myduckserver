@@ -125,12 +125,11 @@ func (d *Database) CreateTable(ctx *sql.Context, name string, schema sql.Primary
 		}
 
 		if col.Default != nil {
-			columnDefault, err := FormatColumnDefault(col.Default.String())
+			columnDefault, err := typ.mysql.duckdbDefault(col.Default.String())
 			if err != nil {
 				return err
 			}
 			colDef += " DEFAULT " + columnDefault
-			typ.mysql.Default = col.Default.String()
 		}
 
 		columns = append(columns, colDef)
