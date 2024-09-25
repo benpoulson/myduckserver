@@ -308,7 +308,7 @@ func mysqlDataType(duckType AnnotatedDuckType, numericPrecision uint8, numericSc
 	}
 }
 
-func (typ *MySQLType) duckdbDefault(defaultValue string) (string, error) {
+func (typ *MySQLType) withDefault(defaultValue string) (string, error) {
 	typ.Default = defaultValue
 	parsed, err := sqlparser.Parse(fmt.Sprintf("SELECT %s", defaultValue))
 	if err != nil {

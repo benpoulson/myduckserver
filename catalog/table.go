@@ -182,7 +182,7 @@ func (t *Table) AddColumn(ctx *sql.Context, column *sql.Column, order *sql.Colum
 	}
 
 	if column.Default != nil {
-		columnDefault, err := typ.mysql.duckdbDefault(column.Default.String())
+		columnDefault, err := typ.mysql.withDefault(column.Default.String())
 		if err != nil {
 			return err
 		}
@@ -238,7 +238,7 @@ func (t *Table) ModifyColumn(ctx *sql.Context, columnName string, column *sql.Co
 	}
 
 	if column.Default != nil {
-		columnDefault, err := typ.mysql.duckdbDefault(column.Default.String())
+		columnDefault, err := typ.mysql.withDefault(column.Default.String())
 		if err != nil {
 			return err
 		}
