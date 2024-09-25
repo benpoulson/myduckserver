@@ -4,7 +4,7 @@ import (
 	"github.com/apache/arrow/go/v17/arrow/array"
 	sqle "github.com/dolthub/go-mysql-server"
 	"github.com/dolthub/go-mysql-server/sql"
-	"github.com/dolthub/vitess/go/mysql"
+	"vitess.io/vitess/go/mysql"
 )
 
 type EventType int8

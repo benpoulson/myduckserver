@@ -18,7 +18,7 @@ import (
 	"sync/atomic"
 
 	"github.com/dolthub/go-mysql-server/sql"
-	"github.com/dolthub/vitess/go/mysql"
+	"vitess.io/vitess/go/mysql"
 )
 
 // binlogEventProducer is responsible for reading binlog events from an established connection and sending them back to

@@ -25,7 +25,7 @@ import (
 
 	gms "github.com/dolthub/go-mysql-server"
 	"github.com/dolthub/go-mysql-server/sql"
-	"github.com/dolthub/vitess/go/mysql"
+	"vitess.io/vitess/go/mysql/replication"
 )
 
 const binlogPositionDirectory = ".replica"
@@ -45,7 +45,7 @@ type binlogPositionStore struct {
 // represents the set of GTIDs that have been successfully executed and applied on this replica. Currently only the
 // default binlog channel ("") is supported. If no .replica/binlog-position file is stored, this method returns a nil
 // mysql.Position and a nil error. If any errors are encountered, a nil mysql.Position and an error are returned.
-func (store *binlogPositionStore) Load(engine *gms.Engine) (*mysql.Position, error) {
+func (store *binlogPositionStore) Load(engine *gms.Engine) (*replication.Position, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
@@ -81,7 +81,7 @@ func (store *binlogPositionStore) Load(engine *gms.Engine) (*mysql.Position, err
 		positionString = string(bytes[len(prefix):])
 	}
 
-	position, err := mysql.ParsePosition(mysqlFlavor, positionString)
+	position, err := replication.ParsePosition(mysqlFlavor, positionString)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +95,7 @@ func (store *binlogPositionStore) Load(engine *gms.Engine) (*mysql.Position, err
 // represents the set of GTIDs that have been successfully executed and applied on this replica. Currently only the
 // default binlog channel ("") is supported. If any errors are encountered persisting the position to disk, an
 // error is returned.
-func (store *binlogPositionStore) Save(ctx *sql.Context, engine *gms.Engine, position *mysql.Position) error {
+func (store *binlogPositionStore) Save(ctx *sql.Context, engine *gms.Engine, position *replication.Position) error {
 	if position == nil {
 		return fmt.Errorf("unable to save binlog position: nil position passed")
 	}
@@ -114,7 +114,7 @@ func (store *binlogPositionStore) Save(ctx *sql.Context, engine *gms.Engine, pos
 		return err
 	}
 
-	encodedPosition := mysql.EncodePosition(*position)
+	encodedPosition := replication.EncodePosition(*position)
 	return os.WriteFile(filePath, []byte(encodedPosition), 0666)
 }
 

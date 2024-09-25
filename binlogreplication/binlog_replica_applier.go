@@ -32,10 +32,13 @@ import (
 	"github.com/dolthub/go-mysql-server/sql/planbuilder"
 	"github.com/dolthub/go-mysql-server/sql/rowexec"
 	"github.com/dolthub/go-mysql-server/sql/types"
-	"github.com/dolthub/vitess/go/mysql"
-	"github.com/dolthub/vitess/go/sqltypes"
-	vquery "github.com/dolthub/vitess/go/vt/proto/query"
 	"github.com/sirupsen/logrus"
+	"vitess.io/vitess/go/mysql"
+	vbinlog "vitess.io/vitess/go/mysql/binlog"
+	"vitess.io/vitess/go/mysql/replication"
+	"vitess.io/vitess/go/mysql/sqlerror"
+	"vitess.io/vitess/go/sqltypes"
+	vquery "vitess.io/vitess/go/vt/proto/query"
 )
 
 // positionStore is a singleton instance for loading/saving binlog position state to disk for durable storage.
@@ -54,9 +57,9 @@ type binlogReplicaApplier struct {
 	format                *mysql.BinlogFormat
 	tableMapsById         map[uint64]*mysql.TableMap
 	stopReplicationChan   chan struct{}
-	currentGtid           mysql.GTID
+	currentGtid           replication.GTID
 	replicationSourceUuid string
-	currentPosition       *mysql.Position // successfully executed GTIDs
+	currentPosition       *replication.Position // successfully executed GTIDs
 	filters               *filterConfiguration
 	running               atomic.Bool
 	engine                *gms.Engine
@@ -90,7 +93,7 @@ func (a *binlogReplicaApplier) Go(ctx *sql.Context) {
 		a.running.Store(false)
 		if err != nil {
 			ctx.GetLogger().Errorf("unexpected error of type %T: '%v'", err, err.Error())
-			MyBinlogReplicaController.setSqlError(mysql.ERUnknownError, err.Error())
+			MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, err.Error())
 		}
 	}()
 }
@@ -211,7 +214,7 @@ func (a *binlogReplicaApplier) startReplicationEventStream(ctx *sql.Context, con
 				gtidPurged = gtidPurged[1:]
 			}
 
-			purged, err := mysql.ParsePosition(mysqlFlavor, gtidPurged)
+			purged, err := replication.ParsePosition(mysqlFlavor, gtidPurged)
 			if err != nil {
 				return err
 			}
@@ -226,10 +229,10 @@ func (a *binlogReplicaApplier) startReplicationEventStream(ctx *sql.Context, con
 		// Also... "starting position" is a bit of a misnomer – it's actually the processed GTIDs, which
 		// indicate the NEXT GTID where replication should start, but it's not as direct as specifying
 		// a starting position, like the Vitess function signature seems to suggest.
-		gtid := mysql.Mysql56GTID{
+		gtid := replication.Mysql56GTID{
 			Sequence: 1,
 		}
-		position = &mysql.Position{GTIDSet: gtid.GTIDSet()}
+		position = &replication.Position{GTIDSet: gtid.GTIDSet()}
 	}
 
 	a.currentPosition = position
@@ -282,7 +285,7 @@ func (a *binlogReplicaApplier) replicaBinlogEventHandler(ctx *sql.Context) error
 			err := a.processBinlogEvent(ctx, engine, event)
 			if err != nil {
 				ctx.GetLogger().Errorf("unexpected error of type %T: '%v'", err, err.Error())
-				MyBinlogReplicaController.setSqlError(mysql.ERUnknownError, err.Error())
+				MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, err.Error())
 			}
 
 		case err := <-eventProducer.ErrorChan():
@@ -304,7 +307,7 @@ func (a *binlogReplicaApplier) replicaBinlogEventHandler(ctx *sql.Context) error
 			} else {
 				// otherwise, log the error if it's something we don't expect and continue
 				ctx.GetLogger().Errorf("unexpected error of type %T: '%v'", err, err.Error())
-				MyBinlogReplicaController.setIoError(mysql.ERUnknownError, err.Error())
+				MyBinlogReplicaController.setIoError(sqlerror.ERUnknownError, err.Error())
 			}
 
 		case <-a.stopReplicationChan:
@@ -334,7 +337,7 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 		if err != nil {
 			msg := fmt.Sprintf("unable to strip checksum from binlog event: '%v'", err.Error())
 			ctx.GetLogger().Error(msg)
-			MyBinlogReplicaController.setSqlError(mysql.ERUnknownError, msg)
+			MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, msg)
 		}
 	}
 
@@ -509,7 +512,7 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 			if flags != 0 {
 				msg := fmt.Sprintf("unsupported binlog protocol message: TableMap event with unsupported flags '%x'", flags)
 				ctx.GetLogger().Errorf(msg)
-				MyBinlogReplicaController.setSqlError(mysql.ERUnknownError, msg)
+				MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, msg)
 			}
 			a.tableMapsById[tableId] = tableMap
 		}
@@ -619,7 +622,7 @@ func (a *binlogReplicaApplier) processRowEvent(ctx *sql.Context, event mysql.Bin
 	if flags != 0 {
 		msg := fmt.Sprintf("unsupported binlog protocol message: row event with unsupported flags '%x'", flags)
 		ctx.GetLogger().Errorf(msg)
-		MyBinlogReplicaController.setSqlError(mysql.ERUnknownError, msg)
+		MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, msg)
 	}
 	schema, tableName, err := getTableSchema(ctx, engine, tableMap.Name, tableMap.Database)
 	if err != nil {
@@ -747,7 +750,7 @@ func (a *binlogReplicaApplier) appendRowFormatChanges(
 	switch a.currentGtid.Flavor() {
 	case "MySQL56": // mysql56FlavorID
 		// TODO(fan): Add support for GTID tags in MySQL >=8.4
-		gtid := a.currentGtid.(mysql.Mysql56GTID)
+		gtid := a.currentGtid.(replication.Mysql56GTID)
 		txnServer = gtid.Server[:]
 		txnSeq = uint64(gtid.Sequence)
 	case "FilePos": // filePosFlavorID, which is not exposed in Dolt's Vitess fork
@@ -762,7 +765,7 @@ func (a *binlogReplicaApplier) appendRowFormatChanges(
 			return fmt.Errorf("invalid GTID: %s", s)
 		}
 	case "MariaDB": // mariadbFlavorID
-		gtid := a.currentGtid.(mysql.MariadbGTID)
+		gtid := a.currentGtid.(replication.MariadbGTID)
 		var domain, server [4]byte
 		binary.BigEndian.PutUint32(domain[:], gtid.Domain)
 		binary.BigEndian.PutUint32(server[:], gtid.Server)
@@ -878,7 +881,11 @@ func parseRow(ctx *sql.Context, engine *gms.Engine, tableMap *mysql.TableMap, sc
 			}
 		} else {
 			var length int
-			value, length, err = mysql.CellValue(data, pos, typ, tableMap.Metadata[i], getSignedType(column))
+			value, length, err = vbinlog.CellValue(data, pos, typ, tableMap.Metadata[i], &vquery.Field{
+				Name:       column.Name,
+				Type:       vquery.Type(column.Type.Type()),
+				ColumnType: column.Type.String(),
+			})
 			if err != nil {
 				return nil, err
 			}
@@ -901,7 +908,7 @@ func parseRow(ctx *sql.Context, engine *gms.Engine, tableMap *mysql.TableMap, sc
 // replica's schema and then choose any signed/unsigned query.Type to pass into mysql.CellValue to instruct it whether
 // to treat a value as signed or unsigned – the actual type does not matter, only the signed/unsigned property.
 func getSignedType(column *sql.Column) vquery.Type {
-	switch column.Type.Type() {
+	switch vquery.Type(column.Type.Type()) {
 	case vquery.Type_UINT8, vquery.Type_UINT16, vquery.Type_UINT24, vquery.Type_UINT32, vquery.Type_UINT64:
 		// For any unsigned integer value, we just need to return any unsigned numeric type to signal to Vitess to treat
 		// the value as unsigned. The actual type returned doesn't matter – only the signed/unsigned property is used.
@@ -1074,7 +1081,7 @@ func executeQueryWithEngine(ctx *sql.Context, engine *gms.Engine, query string) 
 				"query": query,
 			}).Errorf("Applying query failed")
 			msg := fmt.Sprintf("Applying query failed: %v", err.Error())
-			MyBinlogReplicaController.setSqlError(mysql.ERUnknownError, msg)
+			MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, msg)
 		}
 		return
 	}

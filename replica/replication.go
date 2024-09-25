@@ -22,9 +22,9 @@ import (
 	sqle "github.com/dolthub/go-mysql-server"
 	"github.com/dolthub/go-mysql-server/memory"
 	"github.com/dolthub/go-mysql-server/sql"
-	"github.com/dolthub/vitess/go/mysql"
 	"github.com/marcboeker/go-duckdb"
 	"github.com/sirupsen/logrus"
+	"vitess.io/vitess/go/mysql"
 
 	"github.com/apecloud/myduckserver/backend"
 	"github.com/apecloud/myduckserver/binlogreplication"

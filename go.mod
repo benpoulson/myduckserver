@@ -1,13 +1,13 @@
 module github.com/apecloud/myduckserver
 
-go 1.23.1
+go 1.22.7
 
 require (
 	github.com/Shopify/toxiproxy/v2 v2.9.0
 	github.com/apache/arrow/go/v17 v17.0.0
 	github.com/cockroachdb/apd/v3 v3.2.1
-	github.com/dolthub/go-mysql-server v0.18.2-0.20240815142344-761713e36043
-	github.com/dolthub/vitess v0.0.0-20240807181005-71d735078e24
+	github.com/dolthub/go-mysql-server v0.18.2-0.20240923181307-5aacdb13e45a
+	github.com/dolthub/vitess v0.0.0-20240919225659-2ad81685e772
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/marcboeker/go-duckdb v1.8.0
@@ -18,17 +18,18 @@ require (
 	github.com/stretchr/testify v1.9.0
 	golang.org/x/text v0.18.0
 	gopkg.in/src-d/go-errors.v1 v1.0.0
-	vitess.io/vitess v0.10.3-0.20240924104029-31dc222ca392
+	vitess.io/vitess v0.20.2
 )
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
+	github.com/AdaLogics/go-fuzz-headers v0.0.0-20230811130428-ced1acdcaa24 // indirect
 	github.com/DATA-DOG/go-sqlmock v1.5.2 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2 // indirect
-	github.com/dolthub/go-icu-regex v0.0.0-20230524105445-af7e7991c97e // indirect
+	github.com/dolthub/go-icu-regex v0.0.0-20240916130659-0118adc6b662 // indirect
 	github.com/dolthub/jsonpath v0.0.2-0.20240227200619-19675ab05c71 // indirect
 	github.com/dolthub/sqllogictest/go v0.0.0-20240618184124-ca47f9354216 // indirect
 	github.com/go-kit/kit v0.10.0 // indirect
@@ -47,8 +48,8 @@ require (
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pierrec/lz4/v4 v4.1.21 // indirect
+	github.com/pires/go-proxyproto v0.7.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/common v0.59.1 // indirect
@@ -57,8 +58,8 @@ require (
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/tetratelabs/wazero v1.1.0 // indirect
 	github.com/zeebo/xxh3 v1.0.2 // indirect
-	go.opentelemetry.io/otel v1.30.0 // indirect
-	go.opentelemetry.io/otel/trace v1.30.0 // indirect
+	go.opentelemetry.io/otel v1.27.0 // indirect
+	go.opentelemetry.io/otel/trace v1.27.0 // indirect
 	golang.org/x/exp v0.0.0-20240909161429-701f63a606c0 // indirect
 	golang.org/x/mod v0.21.0 // indirect
 	golang.org/x/sync v0.8.0 // indirect
