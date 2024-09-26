@@ -29,9 +29,8 @@ import (
 	gms "github.com/dolthub/go-mysql-server"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/binlogreplication"
-	"github.com/dolthub/go-mysql-server/sql/planbuilder"
-	"github.com/dolthub/go-mysql-server/sql/rowexec"
 	"github.com/dolthub/go-mysql-server/sql/types"
+	doltvtmysql "github.com/dolthub/vitess/go/mysql"
 	"github.com/sirupsen/logrus"
 	"vitess.io/vitess/go/mysql"
 	vbinlog "vitess.io/vitess/go/mysql/binlog"
@@ -59,7 +58,7 @@ type binlogReplicaApplier struct {
 	stopReplicationChan   chan struct{}
 	currentGtid           replication.GTID
 	replicationSourceUuid string
-	currentPosition       *replication.Position // successfully executed GTIDs
+	currentPosition       replication.Position // successfully executed GTIDs
 	filters               *filterConfiguration
 	running               atomic.Bool
 	engine                *gms.Engine
@@ -196,7 +195,7 @@ func (a *binlogReplicaApplier) startReplicationEventStream(ctx *sql.Context, con
 		return err
 	}
 
-	if position == nil {
+	if position.IsZero() {
 		// If the positionStore doesn't have a record of executed GTIDs, check to see if the gtid_purged system
 		// variable is set. If it holds a GTIDSet, then we use that as our starting position. As part of loading
 		// a mysqldump onto a replica, gtid_purged will be set to indicate where to start replication.
@@ -218,11 +217,11 @@ func (a *binlogReplicaApplier) startReplicationEventStream(ctx *sql.Context, con
 			if err != nil {
 				return err
 			}
-			position = &purged
+			position = purged
 		}
 	}
 
-	if position == nil {
+	if position.IsZero() {
 		// If we still don't have any record of executed GTIDs, we create a GTIDSet with just one transaction ID
 		// for the 0000 server ID. There doesn't seem to be a cleaner way of saying "start at the very beginning".
 		//
@@ -232,7 +231,7 @@ func (a *binlogReplicaApplier) startReplicationEventStream(ctx *sql.Context, con
 		gtid := replication.Mysql56GTID{
 			Sequence: 1,
 		}
-		position = &replication.Position{GTIDSet: gtid.GTIDSet()}
+		position = replication.Position{GTIDSet: gtid.GTIDSet()}
 	}
 
 	a.currentPosition = position
@@ -251,7 +250,11 @@ func (a *binlogReplicaApplier) startReplicationEventStream(ctx *sql.Context, con
 		return err
 	}
 
-	return conn.SendBinlogDumpCommand(serverId, *position)
+	binlogFile := ""
+	if filePos, ok := position.GTIDSet.(replication.FilePosGTID); ok {
+		binlogFile = filePos.File
+	}
+	return conn.SendBinlogDumpCommand(serverId, binlogFile, position)
 }
 
 // replicaBinlogEventHandler runs a loop, processing binlog events until the applier's stop replication channel
@@ -289,7 +292,7 @@ func (a *binlogReplicaApplier) replicaBinlogEventHandler(ctx *sql.Context) error
 			}
 
 		case err := <-eventProducer.ErrorChan():
-			if sqlError, isSqlError := err.(*mysql.SQLError); isSqlError {
+			if sqlError, isSqlError := err.(*sqlerror.SQLError); isSqlError {
 				badConnection := sqlError.Message == io.EOF.Error() ||
 					strings.HasPrefix(sqlError.Message, io.ErrUnexpectedEOF.Error())
 				if badConnection {
@@ -364,12 +367,15 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 		if err != nil {
 			return err
 		}
+
+		flags, mode := parseQueryEventVars(*a.format, event)
+
 		ctx.GetLogger().WithFields(logrus.Fields{
 			"database": query.Database,
 			"charset":  query.Charset,
 			"query":    query.SQL,
-			"options":  fmt.Sprintf("0x%x", query.Options),
-			"sql_mode": fmt.Sprintf("0x%x", query.SqlMode),
+			"flags":    fmt.Sprintf("0x%x", flags),
+			"sql_mode": fmt.Sprintf("0x%x", mode),
 		}).Infoln("Received binlog event: Query")
 
 		// When executing SQL statements sent from the primary, we can't be sure what database was modified unless we
@@ -379,7 +385,7 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 		// avoid issues with correctness, at the cost of being slightly less efficient
 		commitToAllDatabases = true
 
-		if query.Options&mysql.QFlagOptionAutoIsNull > 0 {
+		if flags&doltvtmysql.QFlagOptionAutoIsNull > 0 {
 			ctx.GetLogger().Tracef("Setting sql_auto_is_null ON")
 			ctx.SetSessionVariable(ctx, "sql_auto_is_null", 1)
 		} else {
@@ -387,7 +393,7 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 			ctx.SetSessionVariable(ctx, "sql_auto_is_null", 0)
 		}
 
-		if query.Options&mysql.QFlagOptionNotAutocommit > 0 {
+		if flags&doltvtmysql.QFlagOptionNotAutocommit > 0 {
 			ctx.GetLogger().Tracef("Setting autocommit=0")
 			ctx.SetSessionVariable(ctx, "autocommit", 0)
 		} else {
@@ -395,7 +401,7 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 			ctx.SetSessionVariable(ctx, "autocommit", 1)
 		}
 
-		if query.Options&mysql.QFlagOptionNoForeignKeyChecks > 0 {
+		if flags&doltvtmysql.QFlagOptionNoForeignKeyChecks > 0 {
 			ctx.GetLogger().Tracef("Setting foreign_key_checks=0")
 			ctx.SetSessionVariable(ctx, "foreign_key_checks", 0)
 		} else {
@@ -404,7 +410,7 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 		}
 
 		// NOTE: unique_checks is not currently honored by Dolt
-		if query.Options&mysql.QFlagOptionRelaxedUniqueChecks > 0 {
+		if flags&doltvtmysql.QFlagOptionRelaxedUniqueChecks > 0 {
 			ctx.GetLogger().Tracef("Setting unique_checks=0")
 			ctx.SetSessionVariable(ctx, "unique_checks", 0)
 		} else {
@@ -839,6 +845,42 @@ func (a *binlogReplicaApplier) appendRowFormatChanges(
 // Helper functions
 //
 
+// parseQueryEventVars parses the status variables block of a Query event and returns the flags and SQL mode.
+// Copied from: Vitess's vitess/go/mysql/binlog_event_common.go
+// See also: https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_replication_binlog_event.html#sect_protocol_replication_event_query_03
+func parseQueryEventVars(format mysql.BinlogFormat, event mysql.BinlogEvent) (flags uint32, mode uint64) {
+	data := event.Bytes()[format.HeaderLength:]
+	const varPos = 4 + 4 + 1 + 2 + 2
+	varsLen := int(binary.LittleEndian.Uint16(data[4+4+1+2 : 4+4+1+2+2]))
+	vars := data[varPos : varPos+varsLen]
+
+varsLoop:
+	for pos := 0; pos < len(vars); {
+		code := vars[pos]
+		pos++
+
+		switch code {
+		case mysql.QFlags2Code:
+			flags = binary.LittleEndian.Uint32(vars[pos : pos+4])
+			pos += 4
+		case mysql.QSQLModeCode:
+			mode = binary.LittleEndian.Uint64(vars[pos : pos+8])
+		case mysql.QAutoIncrement:
+			pos += 4
+		case mysql.QCatalog:
+			pos += 1 + int(vars[pos]) + 1
+		case mysql.QCatalogNZCode:
+			pos += 1 + int(vars[pos])
+		case mysql.QCharsetCode:
+			pos += 6
+		default:
+			break varsLoop
+		}
+	}
+
+	return
+}
+
 // getTableSchema returns a sql.Schema for the case-insensitive |tableName| in the database named
 // |databaseName|, along with the exact, case-sensitive table name.
 func getTableSchema(ctx *sql.Context, engine *gms.Engine, tableName, databaseName string) (sql.Schema, string, error) {
@@ -902,22 +944,6 @@ func parseRow(ctx *sql.Context, engine *gms.Engine, tableMap *mysql.TableMap, sc
 	return parsedRow, nil
 }
 
-// getSignedType returns a Vitess query.Type that can be used with the Vitess mysql.CellValue function to correctly
-// parse the value of a signed or unsigned integer value. The mysql.TableMap structure provides information about the
-// type, but it doesn't indicate if an integer type is signed or unsigned, so we have to look at the column type in the
-// replica's schema and then choose any signed/unsigned query.Type to pass into mysql.CellValue to instruct it whether
-// to treat a value as signed or unsigned – the actual type does not matter, only the signed/unsigned property.
-func getSignedType(column *sql.Column) vquery.Type {
-	switch vquery.Type(column.Type.Type()) {
-	case vquery.Type_UINT8, vquery.Type_UINT16, vquery.Type_UINT24, vquery.Type_UINT32, vquery.Type_UINT64:
-		// For any unsigned integer value, we just need to return any unsigned numeric type to signal to Vitess to treat
-		// the value as unsigned. The actual type returned doesn't matter – only the signed/unsigned property is used.
-		return vquery.Type_UINT64
-	default:
-		return vquery.Type_INT64
-	}
-}
-
 // convertSqlTypesValues converts a sqltypes.Value instance (from vitess) into a sql.Type value (for go-mysql-server).
 func convertSqlTypesValue(ctx *sql.Context, engine *gms.Engine, value sqltypes.Value, column *sql.Column) (interface{}, error) {
 	if value.IsNull() {
@@ -963,8 +989,6 @@ func convertSqlTypesValue(ctx *sql.Context, engine *gms.Engine, value sqltypes.V
 		// TODO: Consider moving this into DecimalType_.Convert; if DecimalType_.Convert handled trimming
 		//       leading/trailing whitespace, this special case for Decimal types wouldn't be needed.
 		convertedValue, _, err = column.Type.Convert(strings.TrimSpace(value.ToString()))
-	case types.IsJSON(column.Type):
-		convertedValue, err = convertVitessJsonExpressionString(ctx, engine, value)
 	case types.IsTimespan(column.Type):
 		convertedValue, _, err = column.Type.Convert(value.ToString())
 		if err != nil {
@@ -973,52 +997,17 @@ func convertSqlTypesValue(ctx *sql.Context, engine *gms.Engine, value sqltypes.V
 		convertedValue = convertedValue.(types.Timespan).String()
 	default:
 		convertedValue, _, err = column.Type.Convert(value.ToString())
-		// logrus.WithField("column", column.Name).WithField("type", column.Type).Infof("Converting value[%s %v %s] to %v", value.Type(), value.Raw(), value.ToString(), convertedValue)
+
+		// logrus.WithField("column", column.Name).WithField("type", column.Type).Infof(
+		// 	"Converting value[%s %v %s] to %v %T",
+		// 	value.Type(), value.Raw(), value.ToString(), convertedValue, convertedValue,
+		// )
 	}
 	if err != nil {
 		return nil, fmt.Errorf("unable to convert value %q, for column of type %T: %v", value.ToString(), column.Type, err.Error())
 	}
 
 	return convertedValue, nil
-}
-
-// convertVitessJsonExpressionString extracts a JSON value from the specified |value| instance, which Vitess has
-// encoded as a SQL expression string. Vitess parses the binary JSON representation from an incoming binlog event,
-// and converts it into an expression string containing JSON_OBJECT and JSON_ARRAY function calls. Because we don't
-// have access to the raw JSON string or JSON bytes, we have to do extra work to translate from Vitess' SQL
-// expression syntax into a raw JSON string value that we can pass to the storage layer. If Vitess kept around the
-// raw string representation and returned it from value.ToString, this logic would not be necessary.
-func convertVitessJsonExpressionString(ctx *sql.Context, engine *gms.Engine, value sqltypes.Value) (interface{}, error) {
-	if value.Type() != vquery.Type_EXPRESSION {
-		return nil, fmt.Errorf("invalid sqltypes.Value specified; expected a Value instance with an Expression type")
-	}
-
-	strValue := value.String()
-	if strings.HasPrefix(strValue, "EXPRESSION(") {
-		strValue = strValue[len("EXPRESSION(") : len(strValue)-1]
-	}
-
-	binder := planbuilder.New(ctx, engine.Analyzer.Catalog, engine.Parser)
-	node, _, _, qFlags, err := binder.Parse("SELECT "+strValue, false)
-	if err != nil {
-		return nil, err
-	}
-
-	analyze, err := engine.Analyzer.Analyze(ctx, node, nil, qFlags)
-	if err != nil {
-		return nil, err
-	}
-
-	rowIter, err := rowexec.DefaultBuilder.Build(ctx, analyze, nil)
-	if err != nil {
-		return nil, err
-	}
-	row, err := rowIter.Next(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return row[0], nil
 }
 
 func getAllUserDatabaseNames(ctx *sql.Context, engine *gms.Engine) []string {
