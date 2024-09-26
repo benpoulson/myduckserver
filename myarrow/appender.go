@@ -25,6 +25,8 @@ func NewArrowAppender(schema sql.Schema, dictionary ...int) (ArrowAppender, erro
 	return ArrowAppender{array.NewRecordBuilder(pool, arrowSchema)}, nil
 }
 
+// Build creates a new arrow.Record from the memory buffers and resets the builder.
+// The returned Record must be Release()'d after use.
 func (a *ArrowAppender) Build() arrow.Record {
 	return a.RecordBuilder.NewRecord()
 }

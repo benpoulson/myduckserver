@@ -70,7 +70,7 @@ func (p *binlogEventProducer) Go(_ *sql.Context) {
 
 			// If this binlogEventProducer has been stopped while we were blocked waiting to read the next
 			// binlog event, abort processing it and just return instead.
-			if p.IsRunning() == false {
+			if !p.IsRunning() {
 				break
 			}
 

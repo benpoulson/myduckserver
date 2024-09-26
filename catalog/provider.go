@@ -54,10 +54,12 @@ func NewDBProvider(dataDir, dbFile string) (*DatabaseProvider, error) {
 	}
 
 	connector, err := duckdb.NewConnector(dsn, func(execer driver.ExecerContext) error {
-		// install & load the json extension
+		// install & load the json & arrow extensions
 		bootQueries := []string{
 			"INSTALL json",
 			"LOAD json",
+			"INSTALL arrow",
+			"LOAD arrow",
 		}
 
 		for _, query := range bootQueries {

@@ -630,10 +630,11 @@ func (a *binlogReplicaApplier) processRowEvent(ctx *sql.Context, event mysql.Bin
 		ctx.GetLogger().Errorf(msg)
 		MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, msg)
 	}
-	schema, tableName, err := getTableSchema(ctx, engine, tableMap.Name, tableMap.Database)
+	pkSchema, tableName, err := getTableSchema(ctx, engine, tableMap.Name, tableMap.Database)
 	if err != nil {
 		return err
 	}
+	schema := pkSchema.Schema
 
 	fieldCount := len(schema)
 	if len(tableMap.Types) != fieldCount {
@@ -883,20 +884,24 @@ varsLoop:
 
 // getTableSchema returns a sql.Schema for the case-insensitive |tableName| in the database named
 // |databaseName|, along with the exact, case-sensitive table name.
-func getTableSchema(ctx *sql.Context, engine *gms.Engine, tableName, databaseName string) (sql.Schema, string, error) {
+func getTableSchema(ctx *sql.Context, engine *gms.Engine, tableName, databaseName string) (sql.PrimaryKeySchema, string, error) {
 	database, err := engine.Analyzer.Catalog.Database(ctx, databaseName)
 	if err != nil {
-		return nil, "", err
+		return sql.PrimaryKeySchema{}, "", err
 	}
 	table, ok, err := database.GetTableInsensitive(ctx, tableName)
 	if err != nil {
-		return nil, "", err
+		return sql.PrimaryKeySchema{}, "", err
 	}
 	if !ok {
-		return nil, "", fmt.Errorf("unable to find table %q", tableName)
+		return sql.PrimaryKeySchema{}, "", fmt.Errorf("unable to find table %q", tableName)
 	}
 
-	return table.Schema(), table.Name(), nil
+	if pkTable, ok := table.(sql.PrimaryKeyTable); ok {
+		return pkTable.PrimaryKeySchema(), table.Name(), nil
+	}
+
+	return sql.NewPrimaryKeySchema(table.Schema()), table.Name(), nil
 }
 
 // parseRow parses the binary row data from a MySQL binlog event and converts it into a go-mysql-server Row using the
