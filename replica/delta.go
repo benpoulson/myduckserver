@@ -1,12 +1,16 @@
 package replica
 
 import (
-	"github.com/apache/arrow/go/v14/arrow"
+	"github.com/apache/arrow/go/v17/arrow"
 	"github.com/apache/arrow/go/v17/arrow/array"
 	"github.com/apecloud/myduckserver/binlogreplication"
 	"github.com/apecloud/myduckserver/myarrow"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/types"
+)
+
+const (
+	AugmentedColumnList = "action, txn_tag, txn_server, txn_group, txn_seq"
 )
 
 type tableIdentifier struct {

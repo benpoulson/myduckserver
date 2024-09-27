@@ -641,22 +641,22 @@ func (a *binlogReplicaApplier) processRowEvent(ctx *sql.Context, event mysql.Bin
 		return fmt.Errorf("schema mismatch: expected %d fields, got %d from binlog", fieldCount, len(tableMap.Types))
 	}
 
-	var eventType EventType
+	var eventType binlog.RowEventType
 	var isRowFormat bool // all columns are present
 	switch {
 	case event.IsDeleteRows():
-		eventType = DeleteEvent
+		eventType = binlog.DeleteRowEvent
 		isRowFormat = rows.IdentifyColumns.BitCount() == fieldCount
 	case event.IsUpdateRows():
-		eventType = UpdateEvent
+		eventType = binlog.UpdateRowEvent
 		isRowFormat = rows.IdentifyColumns.BitCount() == fieldCount && rows.DataColumns.BitCount() == fieldCount
 	case event.IsWriteRows():
-		eventType = InsertEvent
+		eventType = binlog.InsertRowEvent
 		isRowFormat = rows.DataColumns.BitCount() == fieldCount
 	}
 	ctx.GetLogger().Tracef(" - %s Rows (db: %s, table: %s, row-format: %v)", eventType, tableMap.Database, tableName, isRowFormat)
 
-	if isRowFormat {
+	if isRowFormat && len(pkSchema.PkOrdinals) > 0 {
 		// --binlog-format=ROW & --binlog-row-image=full
 		return a.appendRowFormatChanges(ctx, engine, tableMap, tableName, schema, eventType, &rows)
 	} else {
@@ -667,7 +667,7 @@ func (a *binlogReplicaApplier) processRowEvent(ctx *sql.Context, event mysql.Bin
 func (a *binlogReplicaApplier) writeChanges(
 	ctx *sql.Context, engine *gms.Engine,
 	tableMap *mysql.TableMap, tableName string, schema sql.Schema,
-	event EventType, rows *mysql.Rows,
+	event binlog.RowEventType, rows *mysql.Rows,
 	foreignKeyChecksDisabled bool,
 ) error {
 	tableWriter, err := a.tableWriterProvider.GetTableWriter(
@@ -709,11 +709,11 @@ func (a *binlogReplicaApplier) writeChanges(
 	}
 
 	switch event {
-	case DeleteEvent:
+	case binlog.DeleteRowEvent:
 		err = tableWriter.Delete(ctx, identityRows)
-	case InsertEvent:
+	case binlog.InsertRowEvent:
 		err = tableWriter.Insert(ctx, dataRows)
-	case UpdateEvent:
+	case binlog.UpdateRowEvent:
 		err = tableWriter.Update(ctx, identityRows, dataRows)
 	}
 	if err != nil {
@@ -733,7 +733,7 @@ func (a *binlogReplicaApplier) writeChanges(
 func (a *binlogReplicaApplier) appendRowFormatChanges(
 	ctx *sql.Context, engine *gms.Engine,
 	tableMap *mysql.TableMap, tableName string, schema sql.Schema,
-	event EventType, rows *mysql.Rows,
+	event binlog.RowEventType, rows *mysql.Rows,
 ) error {
 	appender, err := a.tableWriterProvider.GetDeltaAppender(ctx, engine, tableMap.Database, tableName, schema)
 	if err != nil {
@@ -754,25 +754,15 @@ func (a *binlogReplicaApplier) appendRowFormatChanges(
 		txnSeq    uint64
 	)
 
-	switch a.currentGtid.Flavor() {
-	case "MySQL56": // mysql56FlavorID
+	switch gtid := a.currentGtid.(type) {
+	case replication.Mysql56GTID:
 		// TODO(fan): Add support for GTID tags in MySQL >=8.4
-		gtid := a.currentGtid.(replication.Mysql56GTID)
 		txnServer = gtid.Server[:]
 		txnSeq = uint64(gtid.Sequence)
-	case "FilePos": // filePosFlavorID, which is not exposed in Dolt's Vitess fork
-		s := a.currentGtid.String()
-		idx := strings.IndexByte(s, ':')
-		if idx == -1 {
-			return fmt.Errorf("invalid GTID: %s", s)
-		}
-		txnGroup = []byte(s[:idx])
-		txnSeq, err = strconv.ParseUint(s[idx+1:], 10, 64)
-		if err != nil {
-			return fmt.Errorf("invalid GTID: %s", s)
-		}
-	case "MariaDB": // mariadbFlavorID
-		gtid := a.currentGtid.(replication.MariadbGTID)
+	case replication.FilePosGTID:
+		txnGroup = []byte(gtid.File)
+		txnSeq = uint64(gtid.Pos)
+	case replication.MariadbGTID:
 		var domain, server [4]byte
 		binary.BigEndian.PutUint32(domain[:], gtid.Domain)
 		binary.BigEndian.PutUint32(server[:], gtid.Server)
@@ -785,9 +775,9 @@ func (a *binlogReplicaApplier) appendRowFormatChanges(
 
 	// Delete the before image
 	switch event {
-	case DeleteEvent, UpdateEvent:
+	case binlog.DeleteRowEvent, binlog.UpdateRowEvent:
 		for _, row := range rows.Rows {
-			actions.Append(int8(DeleteEvent))
+			actions.Append(int8(binlog.DeleteRowEvent))
 			txnTags.Append(txnTag)
 			txnServers.Append(txnServer)
 			txnGroups.Append(txnGroup)
@@ -813,9 +803,9 @@ func (a *binlogReplicaApplier) appendRowFormatChanges(
 
 	// Insert the after image
 	switch event {
-	case InsertEvent, UpdateEvent:
+	case binlog.InsertRowEvent, binlog.UpdateRowEvent:
 		for _, row := range rows.Rows {
-			actions.Append(int8(DeleteEvent))
+			actions.Append(int8(binlog.DeleteRowEvent))
 			txnTags.Append(txnTag)
 			txnServers.Append(txnServer)
 			txnGroups.Append(txnGroup)

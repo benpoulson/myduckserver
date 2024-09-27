@@ -2,33 +2,11 @@ package binlogreplication
 
 import (
 	"github.com/apache/arrow/go/v17/arrow/array"
+	"github.com/apecloud/myduckserver/binlog"
 	sqle "github.com/dolthub/go-mysql-server"
 	"github.com/dolthub/go-mysql-server/sql"
 	"vitess.io/vitess/go/mysql"
 )
-
-type EventType int8
-
-const (
-	// IMPORTANT: The order of these values is important.
-	// We translate UPDATE to DELETE + INSERT, so DELETE should come first.
-	DeleteEvent EventType = iota
-	UpdateEvent
-	InsertEvent
-)
-
-func (e EventType) String() string {
-	switch e {
-	case DeleteEvent:
-		return "DELETE"
-	case UpdateEvent:
-		return "UPDATE"
-	case InsertEvent:
-		return "INSERT"
-	default:
-		return "UNKNOWN"
-	}
-}
 
 type TableWriter interface {
 	Insert(ctx *sql.Context, keyRows []sql.Row) error
@@ -55,7 +33,7 @@ type TableWriterProvider interface {
 		schema sql.Schema,
 		columnCount, rowCount int,
 		identifyColumns, dataColumns mysql.Bitmap,
-		eventType EventType,
+		eventType binlog.RowEventType,
 		foreignKeyChecksDisabled bool,
 	) (TableWriter, error)
 

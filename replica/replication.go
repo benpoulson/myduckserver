@@ -27,6 +27,7 @@ import (
 	"vitess.io/vitess/go/mysql"
 
 	"github.com/apecloud/myduckserver/backend"
+	"github.com/apecloud/myduckserver/binlog"
 	"github.com/apecloud/myduckserver/binlogreplication"
 	"github.com/apecloud/myduckserver/catalog"
 )
@@ -65,7 +66,7 @@ func (twp *tableWriterProvider) GetTableWriter(
 	schema sql.Schema,
 	columnCount, rowCount int,
 	identifyColumns, dataColumns mysql.Bitmap,
-	eventType binlogreplication.EventType,
+	eventType binlog.RowEventType,
 	foreignKeyChecksDisabled bool,
 ) (binlogreplication.TableWriter, error) {
 	// if eventType == binlogreplication.InsertEvent {
@@ -156,7 +157,7 @@ func (twp *tableWriterProvider) newTableUpdater(
 	schema sql.Schema,
 	columnCount, rowCount int,
 	identifyColumns, dataColumns mysql.Bitmap,
-	eventType binlogreplication.EventType,
+	eventType binlog.RowEventType,
 ) (*tableUpdater, error) {
 	tx, err := twp.pool.BeginTx(ctx, nil)
 	if err != nil {
@@ -191,9 +192,9 @@ func (twp *tableWriterProvider) newTableUpdater(
 		keyCount, dataCount = identifyColumns.BitCount(), dataColumns.BitCount()
 	)
 	switch eventType {
-	case binlogreplication.DeleteEvent:
+	case binlog.DeleteRowEvent:
 		sql, paramCount = buildDeleteTemplate(fullTableName, columnCount, schema, pkColumns, identifyColumns)
-	case binlogreplication.UpdateEvent:
+	case binlog.UpdateRowEvent:
 		pkUpdate = isPkUpdate(schema, identifyColumns, dataColumns)
 		if pkUpdate {
 			// If the primary key is being updated, we need to use DELETE + INSERT.
@@ -209,7 +210,7 @@ func (twp *tableWriterProvider) newTableUpdater(
 			sql, paramCount = buildInsertTemplate(fullTableName, columnCount, true)
 			replace = true
 		}
-	case binlogreplication.InsertEvent:
+	case binlog.InsertRowEvent:
 		sql, paramCount = buildInsertTemplate(fullTableName, columnCount, false)
 	}
 
