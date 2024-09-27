@@ -82,10 +82,10 @@ func (c *DeltaController) Flush(ctx context.Context) error {
 	defer tx.Rollback()
 
 	// Share the buffer among all tables.
-	buf := &bytes.Buffer{}
+	buf := bytes.Buffer{}
 
 	for table, appender := range c.tables {
-		if err := c.updateTable(ctx, tx, table, appender, buf); err != nil {
+		if err := c.updateTable(ctx, tx, table, appender, &buf); err != nil {
 			return err
 		}
 	}

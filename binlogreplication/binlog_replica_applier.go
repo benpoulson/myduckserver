@@ -660,35 +660,24 @@ func (a *binlogReplicaApplier) processRowEvent(ctx *sql.Context, event mysql.Bin
 		// --binlog-format=ROW & --binlog-row-image=full
 		return a.appendRowFormatChanges(ctx, engine, tableMap, tableName, schema, eventType, &rows)
 	} else {
-		return a.writeChanges(ctx, engine, tableMap, tableName, schema, eventType, &rows, foreignKeyChecksDisabled)
+		return a.writeChanges(ctx, engine, tableMap, tableName, pkSchema, eventType, &rows, foreignKeyChecksDisabled)
 	}
 }
 
 func (a *binlogReplicaApplier) writeChanges(
 	ctx *sql.Context, engine *gms.Engine,
-	tableMap *mysql.TableMap, tableName string, schema sql.Schema,
+	tableMap *mysql.TableMap, tableName string, pkSchema sql.PrimaryKeySchema,
 	event binlog.RowEventType, rows *mysql.Rows,
 	foreignKeyChecksDisabled bool,
 ) error {
-	tableWriter, err := a.tableWriterProvider.GetTableWriter(
-		ctx, engine,
-		tableMap.Database, tableName,
-		schema,
-		len(tableMap.Types), len(rows.Rows),
-		rows.IdentifyColumns, rows.DataColumns,
-		event,
-		foreignKeyChecksDisabled,
-	)
-	if err != nil {
-		return err
-	}
-
 	identityRows := make([]sql.Row, 0, len(rows.Rows))
 	dataRows := make([]sql.Row, 0, len(rows.Rows))
 	for _, row := range rows.Rows {
 		var identityRow, dataRow sql.Row
+		var err error
+
 		if len(row.Identify) > 0 {
-			identityRow, err = parseRow(ctx, engine, tableMap, schema, rows.IdentifyColumns, row.NullIdentifyColumns, row.Identify)
+			identityRow, err = parseRow(ctx, engine, tableMap, pkSchema.Schema, rows.IdentifyColumns, row.NullIdentifyColumns, row.Identify)
 			if err != nil {
 				return err
 			}
@@ -699,7 +688,7 @@ func (a *binlogReplicaApplier) writeChanges(
 		identityRows = append(identityRows, identityRow)
 
 		if len(row.Data) > 0 {
-			dataRow, err = parseRow(ctx, engine, tableMap, schema, rows.DataColumns, row.NullColumns, row.Data)
+			dataRow, err = parseRow(ctx, engine, tableMap, pkSchema.Schema, rows.DataColumns, row.NullColumns, row.Data)
 			if err != nil {
 				return err
 			}
@@ -707,6 +696,20 @@ func (a *binlogReplicaApplier) writeChanges(
 		}
 		dataRows = append(dataRows, dataRow)
 	}
+
+	tableWriter, err := a.tableWriterProvider.GetTableWriter(
+		ctx, engine,
+		tableMap.Database, tableName,
+		pkSchema,
+		len(tableMap.Types), len(rows.Rows),
+		rows.IdentifyColumns, rows.DataColumns,
+		event,
+		foreignKeyChecksDisabled,
+	)
+	if err != nil {
+		return err
+	}
+	defer tableWriter.Rollback()
 
 	switch event {
 	case binlog.DeleteRowEvent:
@@ -727,7 +730,7 @@ func (a *binlogReplicaApplier) writeChanges(
 		"rows":  len(rows.Rows),
 	}).Infoln("processRowEvent")
 
-	return tableWriter.Close()
+	return tableWriter.Commit()
 }
 
 func (a *binlogReplicaApplier) appendRowFormatChanges(

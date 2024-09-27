@@ -12,7 +12,8 @@ type TableWriter interface {
 	Insert(ctx *sql.Context, keyRows []sql.Row) error
 	Delete(ctx *sql.Context, keyRows []sql.Row) error
 	Update(ctx *sql.Context, keyRows []sql.Row, valueRows []sql.Row) error
-	Close() error
+	Commit() error
+	Rollback() error
 }
 
 type DeltaAppender interface {
@@ -30,7 +31,7 @@ type TableWriterProvider interface {
 	GetTableWriter(
 		ctx *sql.Context, engine *sqle.Engine,
 		databaseName, tableName string,
-		schema sql.Schema,
+		schema sql.PrimaryKeySchema,
 		columnCount, rowCount int,
 		identifyColumns, dataColumns mysql.Bitmap,
 		eventType binlog.RowEventType,
