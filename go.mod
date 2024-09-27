@@ -6,7 +6,7 @@ require (
 	github.com/Shopify/toxiproxy/v2 v2.9.0
 	github.com/apache/arrow/go/v17 v17.0.0
 	github.com/cockroachdb/apd/v3 v3.2.1
-	github.com/dolthub/go-mysql-server v0.18.2-0.20240923181307-5aacdb13e45a
+	github.com/dolthub/go-mysql-server v0.18.2-0.20240926171723-77ed13c03196
 	github.com/dolthub/vitess v0.0.0-20240919225659-2ad81685e772
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/jmoiron/sqlx v1.4.0
@@ -19,6 +19,11 @@ require (
 	golang.org/x/text v0.18.0
 	gopkg.in/src-d/go-errors.v1 v1.0.0
 	vitess.io/vitess v0.20.2
+)
+
+replace (
+	github.com/dolthub/go-mysql-server v0.18.2-0.20240926171723-77ed13c03196 => github.com/fanyang01/go-mysql-server v0.0.0-20240927093603-e7d5b2c91bf7
+	github.com/dolthub/vitess v0.0.0-20240919225659-2ad81685e772 => github.com/apecloud/dolt-vitess v0.0.0-20240927100428-4ba1490cf5da
 )
 
 require (
@@ -58,8 +63,8 @@ require (
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/tetratelabs/wazero v1.1.0 // indirect
 	github.com/zeebo/xxh3 v1.0.2 // indirect
-	go.opentelemetry.io/otel v1.27.0 // indirect
-	go.opentelemetry.io/otel/trace v1.27.0 // indirect
+	go.opentelemetry.io/otel v1.30.0 // indirect
+	go.opentelemetry.io/otel/trace v1.30.0 // indirect
 	golang.org/x/exp v0.0.0-20240909161429-701f63a606c0 // indirect
 	golang.org/x/mod v0.21.0 // indirect
 	golang.org/x/sync v0.8.0 // indirect
