@@ -808,7 +808,7 @@ func (a *binlogReplicaApplier) appendRowFormatChanges(
 	switch event {
 	case binlog.InsertRowEvent, binlog.UpdateRowEvent:
 		for _, row := range rows.Rows {
-			actions.Append(int8(binlog.DeleteRowEvent))
+			actions.Append(int8(binlog.InsertRowEvent))
 			txnTags.Append(txnTag)
 			txnServers.Append(txnServer)
 			txnGroups.Append(txnGroup)
@@ -832,7 +832,9 @@ func (a *binlogReplicaApplier) appendRowFormatChanges(
 		}
 	}
 
-	return nil
+	// TODO(fan): Apparently this is not how the delta appender is supposed to be used.
+	//   But let's make it work for now.
+	return a.tableWriterProvider.FlushDelta(ctx)
 }
 
 //

@@ -39,7 +39,9 @@ func RegisterReplicaController(provider *catalog.DatabaseProvider, engine *sqle.
 	ctx.SetCurrentDatabase("mysql")
 	replica.SetExecutionContext(ctx)
 
-	replica.SetTableWriterProvider(&tableWriterProvider{pool: pool})
+	twp := &tableWriterProvider{pool: pool}
+	twp.delta.pool = pool
+	replica.SetTableWriterProvider(twp)
 
 	engine.Analyzer.Catalog.BinlogReplicaController = binlogreplication.MyBinlogReplicaController
 
@@ -77,4 +79,8 @@ func (twp *tableWriterProvider) GetDeltaAppender(
 	schema sql.Schema,
 ) (binlogreplication.DeltaAppender, error) {
 	return twp.delta.GetDeltaAppender(databaseName, tableName, schema)
+}
+
+func (twp *tableWriterProvider) FlushDelta(ctx *sql.Context) error {
+	return twp.delta.Flush(ctx)
 }

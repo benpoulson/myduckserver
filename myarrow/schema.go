@@ -64,18 +64,34 @@ func toArrowType(t sql.Type) arrow.DataType {
 	case query.Type_FLOAT64:
 		return arrow.PrimitiveTypes.Float64
 	case query.Type_TIMESTAMP:
-		return arrow.FixedWidthTypes.Timestamp_us
+		switch t.(sql.DatetimeType).Precision() {
+		case 0:
+			return arrow.FixedWidthTypes.Timestamp_s
+		case 1, 2, 3:
+			return arrow.FixedWidthTypes.Timestamp_ms
+		default:
+			return arrow.FixedWidthTypes.Timestamp_us
+		}
 	case query.Type_DATE:
 		return arrow.FixedWidthTypes.Date32
 	case query.Type_TIME:
 		return arrow.FixedWidthTypes.Duration_us
 	case query.Type_DATETIME:
-		return &arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: ""}
+		var unit arrow.TimeUnit
+		switch t.(sql.DatetimeType).Precision() {
+		case 0:
+			unit = arrow.Second
+		case 1, 2, 3:
+			unit = arrow.Millisecond
+		default:
+			unit = arrow.Microsecond
+		}
+		return &arrow.TimestampType{Unit: unit, TimeZone: ""}
 	case query.Type_YEAR:
 		return arrow.PrimitiveTypes.Uint16
 	case query.Type_DECIMAL:
 		dt := t.(sql.DecimalType)
-		if dt.Precision() > 18 {
+		if dt.Precision() > 38 {
 			return &arrow.Decimal256Type{
 				Precision: int32(dt.Precision()),
 				Scale:     int32(dt.Scale()),

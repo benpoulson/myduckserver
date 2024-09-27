@@ -39,7 +39,7 @@ func newDeltaAppender(schema sql.Schema) (*deltaAppender, error) {
 		Type: types.Text,
 	}, &sql.Column{
 		Name: "txn_server",
-		Type: types.Text,
+		Type: types.Blob,
 	}, &sql.Column{
 		Name: "txn_group", // NULL for MySQL & MariaDB GTID; binlog file name for file position based replication
 		Type: types.Text,

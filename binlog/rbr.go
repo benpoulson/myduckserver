@@ -31,11 +31,11 @@ import (
 	"github.com/apecloud/myduckserver/charset"
 	"github.com/cockroachdb/apd/v3"
 	"github.com/dolthub/go-mysql-server/sql"
-	"github.com/dolthub/vitess/go/sqltypes"
-	querypb "github.com/dolthub/vitess/go/vt/proto/query"
-	"github.com/dolthub/vitess/go/vt/proto/vtrpc"
-	"github.com/dolthub/vitess/go/vt/vterrors"
 	vtbinlog "vitess.io/vitess/go/mysql/binlog"
+	"vitess.io/vitess/go/sqltypes"
+	querypb "vitess.io/vitess/go/vt/proto/query"
+	"vitess.io/vitess/go/vt/proto/vtrpc"
+	"vitess.io/vitess/go/vt/vterrors"
 )
 
 // ZeroTimestamp is the special value 0 for a timestamp.
@@ -207,7 +207,7 @@ func printTimestamp(v uint32) *bytes.Buffer {
 // determine other info specifically about its underlying column (SQL column
 // type, column length, charset, etc)
 func CellValue(data []byte, pos int, typ byte, metadata uint16, column *sql.Column, builder array.Builder) (int, error) {
-	ftype := column.Type.Type()
+	ftype := querypb.Type(column.Type.Type())
 	switch typ {
 	case TypeTiny:
 		if sqltypes.IsSigned(ftype) {
@@ -245,7 +245,14 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, column *sql.Colu
 			val := uint64(data[pos]) +
 				uint64(data[pos+1])<<8 +
 				uint64(data[pos+2])<<16
-			builder.(*array.Uint32Builder).Append(uint32(val))
+			switch builder := builder.(type) {
+			case *array.Int32Builder:
+				builder.Append(int32(val))
+			case *array.Uint32Builder:
+				builder.Append(uint32(val))
+			default:
+				return 0, vterrors.Errorf(vtrpc.Code_INTERNAL, "unexpected Arrow builder type %T", builder)
+			}
 		}
 		return 3, nil
 	case TypeLong:
@@ -354,7 +361,7 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, column *sql.Colu
 		nbits := ((metadata >> 8) * 8) + (metadata & 0xFF)
 		l := (int(nbits) + 7) / 8
 		var buf [8]byte
-		copy(buf[l:], data[pos:pos+l])
+		copy(buf[8-l:], data[pos:pos+l])
 		builder.(*array.Uint64Builder).Append(binary.BigEndian.Uint64(buf[:]))
 		return l, nil
 	case TypeTimestamp2:
@@ -850,13 +857,25 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, column *sql.Colu
 				panic(err)
 			}
 			// TODO(fan): Use a buffer passed in from the caller.
-			d := jsonVal.MarshalTo(nil)
+			var buf [64]byte
+			d := jsonVal.MarshalTo(buf[:0])
 			builder.(*array.StringBuilder).BinaryBuilder.Append(d)
 			return l + int(metadata), nil
 		}
 
 		// For blobs, we just copy the bytes.
-		builder.(*array.BinaryBuilder).Append(data[pos : pos+l])
+		switch builder := builder.(type) {
+		case *array.BinaryBuilder:
+			builder.Append(data[pos : pos+l])
+		case *array.StringBuilder:
+			utf8str, err := charset.DecodeBytes(column.Type.(sql.StringType).CharacterSet(), data[pos:pos+l])
+			if err != nil {
+				return l, vterrors.Errorf(vtrpc.Code_INTERNAL, "failed to decode string: %v", err)
+			}
+			builder.BinaryBuilder.Append(utf8str)
+		default:
+			return 0, vterrors.Errorf(vtrpc.Code_INTERNAL, "unexpected Arrow builder type: %T", builder)
+		}
 		return l + int(metadata), nil
 
 	case TypeString:

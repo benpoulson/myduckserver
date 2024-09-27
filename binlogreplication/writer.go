@@ -44,4 +44,7 @@ type TableWriterProvider interface {
 		databaseName, tableName string,
 		schema sql.Schema,
 	) (DeltaAppender, error)
+
+	// FlushDelta writes the accumulated changes to the database.
+	FlushDelta(ctx *sql.Context) error
 }

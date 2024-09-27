@@ -16,6 +16,8 @@ import (
 	"github.com/apecloud/myduckserver/binlogreplication"
 	"github.com/apecloud/myduckserver/catalog"
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql/types"
+	"github.com/sirupsen/logrus"
 )
 
 type DeltaController struct {
@@ -105,6 +107,8 @@ func (c *DeltaController) updateTable(
 	record := appender.Build()
 	defer record.Release()
 
+	fmt.Println("record:", record)
+
 	// TODO(fan): Switch to zero-copy Arrow ingestion once this PR is merged:
 	//   https://github.com/marcboeker/go-duckdb/pull/283
 	w := ipc.NewWriter(buf, ipc.WithSchema(record.Schema()))
@@ -152,12 +156,16 @@ func (c *DeltaController) updateTable(
 	var builder strings.Builder
 	builder.Grow(512)
 	builder.WriteString("SELECT ")
-	builder.WriteString("r[0] AS ")
+	builder.WriteString("r[1] AS ")
 	builder.WriteString(catalog.QuoteIdentifierANSI(augmentedSchema[0].Name))
 	for i, col := range augmentedSchema[1:] {
 		builder.WriteString(", r[")
-		builder.WriteString(strconv.Itoa(i + 1))
-		builder.WriteString("] AS ")
+		builder.WriteString(strconv.Itoa(i + 2))
+		builder.WriteString("]")
+		if types.IsTimestampType(col.Type) {
+			builder.WriteString("::TIMESTAMP")
+		}
+		builder.WriteString(" AS ")
 		builder.WriteString(catalog.QuoteIdentifierANSI(col.Name))
 	}
 	builder.WriteString(" FROM (SELECT ")
@@ -169,20 +177,44 @@ func (c *DeltaController) updateTable(
 	builder.WriteString(")")
 	condenseDeltaSQL := builder.String()
 
+	var (
+		result       stdsql.Result
+		rowsAffected int64
+		err          error
+	)
+
 	// Create a temporary table to store the latest delta view.
-	if _, err := tx.ExecContext(ctx, "CREATE OR REPLACE TEMP TABLE delta AS "+condenseDeltaSQL); err != nil {
+	result, err = tx.ExecContext(ctx, "CREATE OR REPLACE TEMP TABLE delta AS "+condenseDeltaSQL)
+	if err == nil {
+		rowsAffected, err = result.RowsAffected()
+	}
+	if err != nil {
 		return err
 	}
 	defer tx.ExecContext(ctx, "DROP TABLE IF EXISTS temp.main.delta")
+
+	logrus.WithFields(logrus.Fields{
+		"table": qualifiedTableName,
+		"rows":  rowsAffected,
+	}).Infoln("Delta created")
 
 	// Insert or replace new rows (action = INSERT) into the base table.
 	insertSQL := "INSERT OR REPLACE INTO " +
 		qualifiedTableName +
 		" SELECT * EXCLUDE (" + AugmentedColumnList + ") FROM temp.main.delta WHERE action = " +
 		strconv.Itoa(int(binlog.InsertRowEvent))
-	if _, err := tx.ExecContext(ctx, insertSQL); err != nil {
+	result, err = tx.ExecContext(ctx, insertSQL)
+	if err == nil {
+		rowsAffected, err = result.RowsAffected()
+	}
+	if err != nil {
 		return err
 	}
+
+	logrus.WithFields(logrus.Fields{
+		"table": qualifiedTableName,
+		"rows":  rowsAffected,
+	}).Infoln("Inserted")
 
 	// Delete rows that have been deleted.
 	// The plan for `IN` is optimized to a SEMI JOIN,
@@ -196,6 +228,18 @@ func (c *DeltaController) updateTable(
 	deleteSQL := "DELETE FROM " + qualifiedTableName +
 		" WHERE " + inTuple + " IN (SELECT " + inTuple +
 		"FROM temp.main.delta WHERE action = " + strconv.Itoa(int(binlog.DeleteRowEvent)) + ")"
-	_, err := tx.ExecContext(ctx, deleteSQL)
-	return err
+	result, err = tx.ExecContext(ctx, deleteSQL)
+	if err == nil {
+		rowsAffected, err = result.RowsAffected()
+	}
+	if err != nil {
+		return err
+	}
+
+	logrus.WithFields(logrus.Fields{
+		"table": qualifiedTableName,
+		"rows":  rowsAffected,
+	}).Infoln("Deleted")
+
+	return nil
 }
