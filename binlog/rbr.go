@@ -17,9 +17,7 @@ limitations under the License.
 package binlog
 
 import (
-	"bytes"
 	"encoding/binary"
-	"fmt"
 	"math"
 	"math/big"
 	"time"
@@ -185,28 +183,13 @@ func CellLength(data []byte, pos int, typ byte, metadata uint16) (int, error) {
 	}
 }
 
-// printTimestamp is a helper method to append a timestamp into a bytes.Buffer,
-// and return the Buffer.
-func printTimestamp(v uint32) *bytes.Buffer {
-	if v == 0 {
-		return bytes.NewBuffer(ZeroTimestamp)
-	}
-
-	t := time.Unix(int64(v), 0).UTC()
-	year, month, day := t.Date()
-	hour, minute, second := t.Clock()
-
-	result := &bytes.Buffer{}
-	fmt.Fprintf(result, "%04d-%02d-%02d %02d:%02d:%02d", year, int(month), day, hour, minute, second)
-	return result
-}
-
 // CellValue returns the data for a cell as a sqltypes.Value, and how
 // many bytes it takes. It uses source type in querypb.Type and vitess type
 // byte to determine general shared aspects of types and the querypb.Field to
 // determine other info specifically about its underlying column (SQL column
 // type, column length, charset, etc)
 func CellValue(data []byte, pos int, typ byte, metadata uint16, column *sql.Column, builder array.Builder) (int, error) {
+	// logrus.Infof("CellValue: binlog type: %s, column: %v, type: %v, builder: %T", TypeNames[typ], column.Name, column.Type, builder)
 	ftype := querypb.Type(column.Type.Type())
 	switch typ {
 	case TypeTiny:
@@ -351,7 +334,11 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, column *sql.Colu
 			src = data[pos+1 : pos+1+l]
 		}
 		if typeToUse == querypb.Type_VARCHAR {
-			builder.(*array.StringBuilder).BinaryBuilder.Append(src)
+			utf8str, err := charset.DecodeBytes(column.Type.(sql.StringType).CharacterSet(), src)
+			if err != nil {
+				return size, err
+			}
+			builder.(*array.StringBuilder).BinaryBuilder.Append(utf8str)
 		} else {
 			builder.(*array.BinaryBuilder).Append(src)
 		}
@@ -856,7 +843,6 @@ func CellValue(data []byte, pos int, typ byte, metadata uint16, column *sql.Colu
 			if err != nil {
 				panic(err)
 			}
-			// TODO(fan): Use a buffer passed in from the caller.
 			var buf [64]byte
 			d := jsonVal.MarshalTo(buf[:0])
 			builder.(*array.StringBuilder).BinaryBuilder.Append(d)

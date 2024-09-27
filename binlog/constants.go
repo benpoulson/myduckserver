@@ -115,3 +115,38 @@ const (
 	// TypeGeometry is MYSQL_TYPE_GEOMETRY
 	TypeGeometry = 255
 )
+
+var TypeNames = map[byte]string{
+	TypeDecimal:    "DECIMAL",
+	TypeTiny:       "TINY",
+	TypeShort:      "SHORT",
+	TypeLong:       "LONG",
+	TypeFloat:      "FLOAT",
+	TypeDouble:     "DOUBLE",
+	TypeNull:       "NULL",
+	TypeTimestamp:  "TIMESTAMP",
+	TypeLongLong:   "LONGLONG",
+	TypeInt24:      "INT24",
+	TypeDate:       "DATE",
+	TypeTime:       "TIME",
+	TypeDateTime:   "DATETIME",
+	TypeYear:       "YEAR",
+	TypeNewDate:    "NEWDATE",
+	TypeVarchar:    "VARCHAR",
+	TypeBit:        "BIT",
+	TypeTimestamp2: "TIMESTAMP2",
+	TypeDateTime2:  "DATETIME2",
+	TypeTime2:      "TIME2",
+	TypeVector:     "VECTOR",
+	TypeJSON:       "JSON",
+	TypeNewDecimal: "NEWDECIMAL",
+	TypeEnum:       "ENUM",
+	TypeSet:        "SET",
+	TypeTinyBlob:   "TINY_BLOB",
+	TypeMediumBlob: "MEDIUM_BLOB",
+	TypeLongBlob:   "LONG_BLOB",
+	TypeBlob:       "BLOB",
+	TypeVarString:  "VAR_STRING",
+	TypeString:     "STRING",
+	TypeGeometry:   "GEOMETRY",
+}
