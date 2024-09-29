@@ -9,7 +9,6 @@ import (
 	"sync"
 
 	stdsql "database/sql"
-	"database/sql/driver"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/marcboeker/go-duckdb"
@@ -53,27 +52,24 @@ func NewDBProvider(dataDir, dbFile string) (*DatabaseProvider, error) {
 		dsn = filepath.Join(dataDir, dbFile)
 	}
 
-	connector, err := duckdb.NewConnector(dsn, func(execer driver.ExecerContext) error {
-		// install & load the json & arrow extensions
-		bootQueries := []string{
-			"INSTALL json",
-			"LOAD json",
-			"INSTALL arrow",
-			"LOAD arrow",
-		}
-
-		for _, query := range bootQueries {
-			if _, err := execer.ExecContext(context.Background(), query, nil); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	connector, err := duckdb.NewConnector(dsn, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	storage := stdsql.OpenDB(connector)
+
+	bootQueries := []string{
+		"INSTALL arrow",
+		"LOAD arrow",
+	}
+	for _, q := range bootQueries {
+		if _, err := storage.ExecContext(context.Background(), q); err != nil {
+			storage.Close()
+			connector.Close()
+			return nil, fmt.Errorf("failed to execute boot query %q: %v", q, err)
+		}
+	}
 
 	return &DatabaseProvider{
 		mu:                        &sync.RWMutex{},

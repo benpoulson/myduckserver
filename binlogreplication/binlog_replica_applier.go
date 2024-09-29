@@ -254,6 +254,13 @@ func (a *binlogReplicaApplier) startReplicationEventStream(ctx *sql.Context, con
 	if filePos, ok := position.GTIDSet.(replication.FilePosGTID); ok {
 		binlogFile = filePos.File
 	}
+
+	ctx.GetLogger().WithFields(logrus.Fields{
+		"serverId":   serverId,
+		"binlogFile": binlogFile,
+		"position":   position.String(),
+	}).Infoln("Sending binlog dump command to source")
+
 	return conn.SendBinlogDumpCommand(serverId, binlogFile, position)
 }
 
