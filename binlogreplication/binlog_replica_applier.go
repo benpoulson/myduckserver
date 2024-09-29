@@ -419,8 +419,10 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 		}
 
 		createCommit = !strings.EqualFold(query.SQL, "begin")
-		// TODO(fan): Disable the transaction for now.
-		if createCommit {
+		// TODO(fan): Here we
+		//   skip the transaction for now;
+		//   skip the operations on `mysql.time_zone*` tables, which are not supported by go-mysql-server yet.
+		if createCommit && !(query.Database == "mysql" && strings.HasPrefix(query.SQL, "TRUNCATE TABLE time_zone")) {
 			ctx.SetCurrentDatabase(query.Database)
 			executeQueryWithEngine(ctx, engine, query.SQL)
 		}
@@ -549,7 +551,7 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 	}
 
 	if createCommit {
-		// TODO(fan): Disable transaction commit for now
+		// TODO(fan): Skip the transaction commit for now
 		_ = commitToAllDatabases
 		// var databasesToCommit []string
 		// if commitToAllDatabases {
