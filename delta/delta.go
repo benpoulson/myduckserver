@@ -1,4 +1,4 @@
-package replica
+package delta
 
 import (
 	"github.com/apache/arrow/go/v17/arrow"
@@ -96,6 +96,14 @@ func (a *deltaAppender) TxnSeqNumber() *array.Uint64Builder {
 	return a.appender.Field(4).(*array.Uint64Builder)
 }
 
+func (a *deltaAppender) RowCount() int {
+	return a.Action().Len()
+}
+
 func (a *deltaAppender) Build() arrow.Record {
 	return a.appender.Build()
+}
+
+func (a *deltaAppender) Grow(n int) {
+	a.appender.Grow(n)
 }

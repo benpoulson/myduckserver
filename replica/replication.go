@@ -26,6 +26,7 @@ import (
 	"github.com/apecloud/myduckserver/binlog"
 	"github.com/apecloud/myduckserver/binlogreplication"
 	"github.com/apecloud/myduckserver/catalog"
+	"github.com/apecloud/myduckserver/delta"
 )
 
 // registerReplicaController registers the replica controller into the engine
@@ -40,7 +41,9 @@ func RegisterReplicaController(provider *catalog.DatabaseProvider, engine *sqle.
 	replica.SetExecutionContext(ctx)
 
 	twp := &tableWriterProvider{pool: pool}
-	twp.delta.pool = pool
+	twp.controller = delta.NewController(pool)
+	twp.controller.Go()
+
 	replica.SetTableWriterProvider(twp)
 
 	engine.Analyzer.Catalog.BinlogReplicaController = binlogreplication.MyBinlogReplicaController
@@ -52,8 +55,8 @@ func RegisterReplicaController(provider *catalog.DatabaseProvider, engine *sqle.
 }
 
 type tableWriterProvider struct {
-	pool  *backend.ConnectionPool
-	delta DeltaController
+	pool       *backend.ConnectionPool
+	controller *delta.DeltaController
 }
 
 var _ binlogreplication.TableWriterProvider = &tableWriterProvider{}
@@ -78,9 +81,9 @@ func (twp *tableWriterProvider) GetDeltaAppender(
 	databaseName, tableName string,
 	schema sql.Schema,
 ) (binlogreplication.DeltaAppender, error) {
-	return twp.delta.GetDeltaAppender(databaseName, tableName, schema)
+	return twp.controller.GetDeltaAppender(databaseName, tableName, schema)
 }
 
 func (twp *tableWriterProvider) FlushDelta(ctx *sql.Context) error {
-	return twp.delta.Flush(ctx)
+	return twp.controller.Flush(ctx)
 }
