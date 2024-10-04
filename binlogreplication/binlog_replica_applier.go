@@ -26,9 +26,11 @@ import (
 
 	"github.com/apecloud/myduckserver/binlog"
 	"github.com/apecloud/myduckserver/charset"
+	"github.com/apecloud/myduckserver/delta"
 	gms "github.com/dolthub/go-mysql-server"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/binlogreplication"
+	"github.com/dolthub/go-mysql-server/sql/plan"
 	"github.com/dolthub/go-mysql-server/sql/types"
 	doltvtmysql "github.com/dolthub/vitess/go/mysql"
 	"github.com/sirupsen/logrus"
@@ -272,6 +274,9 @@ func (a *binlogReplicaApplier) replicaBinlogEventHandler(ctx *sql.Context) error
 	var conn *mysql.Conn
 	var eventProducer *binlogEventProducer
 
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+
 	// Process binlog events
 	for {
 		if conn == nil {
@@ -320,10 +325,16 @@ func (a *binlogReplicaApplier) replicaBinlogEventHandler(ctx *sql.Context) error
 				MyBinlogReplicaController.setIoError(sqlerror.ERUnknownError, err.Error())
 			}
 
+		case <-ticker.C:
+			if err := a.tableWriterProvider.FlushDelta(ctx, delta.TimeTickFlushReason); err != nil {
+				ctx.GetLogger().Errorf("Failed to flush changelog: %v", err.Error())
+				MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, err.Error())
+			}
+
 		case <-a.stopReplicationChan:
 			ctx.GetLogger().Trace("received stop replication signal")
 			eventProducer.Stop()
-			return nil
+			return a.tableWriterProvider.FlushDelta(ctx, delta.OnCloseFlushReason)
 		}
 	}
 }
@@ -431,7 +442,14 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 		//   skip the operations on `mysql.time_zone*` tables, which are not supported by go-mysql-server yet.
 		if createCommit && !(query.Database == "mysql" && strings.HasPrefix(query.SQL, "TRUNCATE TABLE time_zone")) {
 			ctx.SetCurrentDatabase(query.Database)
-			executeQueryWithEngine(ctx, engine, query.SQL)
+			if err := a.executeQueryWithEngine(ctx, engine, query.SQL); err != nil {
+				ctx.GetLogger().WithFields(logrus.Fields{
+					"error": err.Error(),
+					"query": query.SQL,
+				}).Errorf("Applying query failed")
+				msg := fmt.Sprintf("Applying query failed: %v", err.Error())
+				MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, msg)
+			}
 		}
 
 	case event.IsRotate():
@@ -841,9 +859,7 @@ func (a *binlogReplicaApplier) appendRowFormatChanges(
 		}
 	}
 
-	// TODO(fan): Apparently this is not how the delta appender is supposed to be used.
-	//   But let's make it work for now.
-	return a.tableWriterProvider.FlushDelta(ctx)
+	return nil
 }
 
 //
@@ -1060,7 +1076,7 @@ func loadReplicaServerId() (uint32, error) {
 	return serverId, nil
 }
 
-func executeQueryWithEngine(ctx *sql.Context, engine *gms.Engine, query string) {
+func (a *binlogReplicaApplier) executeQueryWithEngine(ctx *sql.Context, engine *gms.Engine, query string) error {
 	// Create a sub-context when running queries against the engine, so that we get an accurate query start time.
 	queryCtx := sql.NewContext(ctx, sql.WithSession(ctx.Session)).WithQuery(query)
 
@@ -1070,18 +1086,43 @@ func executeQueryWithEngine(ctx *sql.Context, engine *gms.Engine, query string) 
 		}).Warn("No current database selected")
 	}
 
+	// Analyze the query first to check if it's a DDL or DML statement,
+	// and flush the changelog if necessary.
+	node, err := engine.PrepareQuery(queryCtx, query)
+	if err != nil {
+		return err
+	}
+	ctx.GetLogger().WithFields(logrus.Fields{
+		"query": query,
+		"db":    queryCtx.GetCurrentDatabase(),
+	}).Infof("Executing %T query", node)
+	var (
+		flushChangelog bool
+		flushReason    delta.FlushReason
+	)
+	switch node.(type) {
+	case *plan.InsertInto, *plan.Update, *plan.DeleteFrom, *plan.LoadData:
+		flushChangelog, flushReason = true, delta.DMLStmtFlushReason
+	case *plan.DropDB,
+		*plan.DropTable, *plan.RenameTable,
+		*plan.AddColumn, *plan.RenameColumn, *plan.DropColumn, *plan.ModifyColumn,
+		*plan.CreateIndex, *plan.DropIndex, *plan.AlterIndex,
+		*plan.AlterDefaultSet, *plan.AlterDefaultDrop:
+		flushChangelog, flushReason = true, delta.DDLStmtFlushReason
+	}
+	if flushChangelog {
+		if err := a.tableWriterProvider.FlushDelta(ctx, flushReason); err != nil {
+			return err
+		}
+	}
+
 	_, iter, _, err := engine.Query(queryCtx, query)
 	if err != nil {
 		// Log any errors, except for commits with "nothing to commit"
 		if err.Error() != "nothing to commit" {
-			queryCtx.GetLogger().WithFields(logrus.Fields{
-				"error": err.Error(),
-				"query": query,
-			}).Errorf("Applying query failed")
-			msg := fmt.Sprintf("Applying query failed: %v", err.Error())
-			MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, msg)
+			return err
 		}
-		return
+		return nil
 	}
 	for {
 		_, err := iter.Next(queryCtx)
@@ -1089,7 +1130,7 @@ func executeQueryWithEngine(ctx *sql.Context, engine *gms.Engine, query string) 
 			if err != io.EOF {
 				queryCtx.GetLogger().Errorf("ERROR reading query results: %v ", err.Error())
 			}
-			return
+			return err
 		}
 	}
 }
@@ -1101,13 +1142,4 @@ func executeQueryWithEngine(ctx *sql.Context, engine *gms.Engine, query string) 
 // convertToHexString returns a lower-case hex string representation of the specified uint16 value |v|.
 func convertToHexString(v uint16) string {
 	return fmt.Sprintf("%x", v)
-}
-
-// keys returns a slice containing the keys in the specified map |m|.
-func keys[K comparable, V any](m map[K]V) []K {
-	keys := make([]K, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
 }

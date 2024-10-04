@@ -14,7 +14,6 @@ import (
 	"github.com/apache/arrow/go/v17/arrow/ipc"
 	"github.com/apecloud/myduckserver/backend"
 	"github.com/apecloud/myduckserver/binlog"
-	"github.com/apecloud/myduckserver/binlogreplication"
 	"github.com/apecloud/myduckserver/catalog"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/types"
@@ -40,7 +39,7 @@ type FlushStats struct {
 
 type DeltaController struct {
 	mutex    sync.Mutex
-	tables   map[tableIdentifier]*deltaAppender
+	tables   map[tableIdentifier]*DeltaAppender
 	pool     *backend.ConnectionPool
 	requests chan *FlushRequest
 	close    chan struct{}
@@ -49,7 +48,7 @@ type DeltaController struct {
 func NewController(pool *backend.ConnectionPool) *DeltaController {
 	return &DeltaController{
 		pool:     pool,
-		tables:   make(map[tableIdentifier]*deltaAppender),
+		tables:   make(map[tableIdentifier]*DeltaAppender),
 		requests: make(chan *FlushRequest, 16),
 		close:    make(chan struct{}, 1),
 	}
@@ -58,7 +57,7 @@ func NewController(pool *backend.ConnectionPool) *DeltaController {
 func (c *DeltaController) GetDeltaAppender(
 	databaseName, tableName string,
 	schema sql.Schema,
-) (binlogreplication.DeltaAppender, error) {
+) (*DeltaAppender, error) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
@@ -99,10 +98,10 @@ func (c *DeltaController) Close() {
 	c.close <- struct{}{}
 }
 
-func (c *DeltaController) Flush(ctx context.Context) error {
+func (c *DeltaController) Flush(ctx context.Context, reason FlushReason) error {
 	done := make(chan *FlushResponse)
 	c.requests <- &FlushRequest{
-		Reason: UnknownFlushReason,
+		Reason: reason,
 		Done:   done,
 	}
 	resp := <-done
@@ -174,7 +173,7 @@ func (c *DeltaController) updateTable(
 	ctx context.Context,
 	tx *stdsql.Tx,
 	table tableIdentifier,
-	appender *deltaAppender,
+	appender *DeltaAppender,
 	buf *bytes.Buffer,
 	stats *FlushStats,
 ) error {

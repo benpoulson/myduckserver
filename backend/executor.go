@@ -31,6 +31,8 @@ import (
 type DuckBuilder struct {
 	base sql.NodeExecBuilder
 	pool *ConnectionPool
+
+	FlushDeltaBuffer func() error
 }
 
 var _ sql.NodeExecBuilder = (*DuckBuilder)(nil)
@@ -43,6 +45,14 @@ func NewDuckBuilder(base sql.NodeExecBuilder, pool *ConnectionPool) *DuckBuilder
 }
 
 func (b *DuckBuilder) Build(ctx *sql.Context, root sql.Node, r sql.Row) (sql.RowIter, error) {
+	// Flush buffered delta before executing the query.
+	// TODO(fan): Be fine-grained and flush only when the replicated tables are touched.
+	if b.FlushDeltaBuffer != nil {
+		if err := b.FlushDeltaBuffer(); err != nil {
+			return nil, err
+		}
+	}
+
 	n := root
 	qp, ok := n.(*plan.QueryProcess)
 	if ok {

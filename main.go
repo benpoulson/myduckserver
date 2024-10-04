@@ -81,7 +81,7 @@ func main() {
 		logrus.Fatalln("Failed to set the persister:", err)
 	}
 
-	replica.RegisterReplicaController(provider, engine, pool)
+	replica.RegisterReplicaController(provider, engine, pool, builder)
 
 	config := server.Config{
 		Protocol: "tcp",

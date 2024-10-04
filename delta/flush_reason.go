@@ -7,6 +7,8 @@ const (
 	UnknownFlushReason FlushReason = iota
 	// DDLStmtFlushReason means that the changes have to be flushed because of a DDL statement.
 	DDLStmtFlushReason
+	// DMLStmtFlushReason means that the changes have to be flushed because of a DML statement.
+	DMLStmtFlushReason
 	// RowCountLimitFlushReason means that the changes have to be flushed because the row count limit is reached.
 	RowCountLimitFlushReason
 	// MemoryLimitFlushReason means that the changes have to be flushed because the memory limit is reached.
@@ -15,12 +17,16 @@ const (
 	TimeTickFlushReason
 	// QueryFlushReason means that the changes have to be flushed because some tables are queried.
 	QueryFlushReason
+	// OnCloseFlushReason means that the changes have to be flushed because the controller is closed.
+	OnCloseFlushReason
 )
 
 func (r FlushReason) String() string {
 	switch r {
 	case DDLStmtFlushReason:
 		return "DDLStmt"
+	case DMLStmtFlushReason:
+		return "DMLStmt"
 	case RowCountLimitFlushReason:
 		return "RowCountLimit"
 	case MemoryLimitFlushReason:

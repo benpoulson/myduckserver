@@ -31,7 +31,7 @@ import (
 
 // registerReplicaController registers the replica controller into the engine
 // to handle the replication commands, such as START REPLICA, STOP REPLICA, etc.
-func RegisterReplicaController(provider *catalog.DatabaseProvider, engine *sqle.Engine, pool *backend.ConnectionPool) {
+func RegisterReplicaController(provider *catalog.DatabaseProvider, engine *sqle.Engine, pool *backend.ConnectionPool, builder *backend.DuckBuilder) {
 	replica := binlogreplication.MyBinlogReplicaController
 	replica.SetEngine(engine)
 
@@ -45,6 +45,9 @@ func RegisterReplicaController(provider *catalog.DatabaseProvider, engine *sqle.
 	twp.controller.Go()
 
 	replica.SetTableWriterProvider(twp)
+	builder.FlushDeltaBuffer = func() error {
+		return twp.FlushDelta(ctx, delta.QueryFlushReason)
+	}
 
 	engine.Analyzer.Catalog.BinlogReplicaController = binlogreplication.MyBinlogReplicaController
 
@@ -84,6 +87,6 @@ func (twp *tableWriterProvider) GetDeltaAppender(
 	return twp.controller.GetDeltaAppender(databaseName, tableName, schema)
 }
 
-func (twp *tableWriterProvider) FlushDelta(ctx *sql.Context) error {
-	return twp.controller.Flush(ctx)
+func (twp *tableWriterProvider) FlushDelta(ctx *sql.Context, reason delta.FlushReason) error {
+	return twp.controller.Flush(ctx, reason)
 }

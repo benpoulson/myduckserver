@@ -3,6 +3,7 @@ package binlogreplication
 import (
 	"github.com/apache/arrow/go/v17/arrow/array"
 	"github.com/apecloud/myduckserver/binlog"
+	"github.com/apecloud/myduckserver/delta"
 	sqle "github.com/dolthub/go-mysql-server"
 	"github.com/dolthub/go-mysql-server/sql"
 	"vitess.io/vitess/go/mysql"
@@ -46,5 +47,5 @@ type TableWriterProvider interface {
 	) (DeltaAppender, error)
 
 	// FlushDelta writes the accumulated changes to the database.
-	FlushDelta(ctx *sql.Context) error
+	FlushDelta(ctx *sql.Context, reason delta.FlushReason) error
 }
