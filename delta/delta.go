@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	AugmentedColumnList = "action, txn_tag, txn_server, txn_group, txn_seq"
+	AugmentedColumnList = "action, txn_tag, txn_server, txn_group, txn_seq, txn_stmt"
 )
 
 type tableIdentifier struct {
@@ -41,7 +41,10 @@ func newDeltaAppender(schema sql.Schema) (*DeltaAppender, error) {
 		Name: "txn_group", // NULL for MySQL & MariaDB GTID; binlog file name for file position based replication
 		Type: types.Text,
 	}, &sql.Column{
-		Name: "txn_seq",
+		Name: "txn_seq", // Transaction ID for MySQL & MariaDB GTID; binlog position for file position based replication
+		Type: types.Uint64,
+	}, &sql.Column{
+		Name: "txn_stmt", // Ordinal number of the statement in the transaction
 		Type: types.Uint64,
 	})
 	augmented = append(augmented, schema...)
@@ -58,11 +61,11 @@ func newDeltaAppender(schema sql.Schema) (*DeltaAppender, error) {
 }
 
 func (a *DeltaAppender) Field(i int) array.Builder {
-	return a.appender.Field(i + 5)
+	return a.appender.Field(i + 6)
 }
 
 func (a *DeltaAppender) Fields() []array.Builder {
-	return a.appender.Fields()[5:]
+	return a.appender.Fields()[6:]
 }
 
 func (a *DeltaAppender) Schema() sql.Schema {
@@ -91,6 +94,10 @@ func (a *DeltaAppender) TxnGroup() *array.BinaryDictionaryBuilder {
 
 func (a *DeltaAppender) TxnSeqNumber() *array.Uint64Builder {
 	return a.appender.Field(4).(*array.Uint64Builder)
+}
+
+func (a *DeltaAppender) TxnStmtOrdinal() *array.Uint64Builder {
+	return a.appender.Field(5).(*array.Uint64Builder)
 }
 
 func (a *DeltaAppender) RowCount() int {

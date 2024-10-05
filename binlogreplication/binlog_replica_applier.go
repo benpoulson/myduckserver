@@ -65,6 +65,7 @@ type binlogReplicaApplier struct {
 	running               atomic.Bool
 	engine                *gms.Engine
 	tableWriterProvider   TableWriterProvider
+	inTxnStmtID           atomic.Uint64 // auto-incrementing ID for statements within a transaction
 }
 
 func newBinlogReplicaApplier(filters *filterConfiguration) *binlogReplicaApplier {
@@ -451,6 +452,7 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 				MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, msg)
 			}
 		}
+		a.inTxnStmtID.Add(1)
 
 	case event.IsRotate():
 		// When a binary log file exceeds the configured size limit, a ROTATE_EVENT is written at the end of the file,
@@ -557,6 +559,7 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 		if err != nil {
 			return err
 		}
+		a.inTxnStmtID.Add(1)
 
 	default:
 		// https://mariadb.com/kb/en/2-binlog-event-header/
@@ -597,6 +600,9 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 		if err != nil {
 			return fmt.Errorf("unable to store GTID executed metadata to disk: %s", err.Error())
 		}
+
+		// Reset the statement ID counter after a commit
+		a.inTxnStmtID.Store(0)
 	}
 
 	return nil
@@ -681,7 +687,7 @@ func (a *binlogReplicaApplier) processRowEvent(ctx *sql.Context, event mysql.Bin
 		eventType = binlog.InsertRowEvent
 		isRowFormat = rows.DataColumns.BitCount() == fieldCount
 	}
-	ctx.GetLogger().Tracef(" - %s Rows (db: %s, table: %s, row-format: %v)", eventType, tableMap.Database, tableName, isRowFormat)
+	ctx.GetLogger().Infof(" - %s Rows (db: %s, table: %s, row format: %v, row count: %v)", eventType, tableMap.Database, tableName, isRowFormat, len(rows.Rows))
 
 	if isRowFormat && len(pkSchema.PkOrdinals) > 0 {
 		// --binlog-format=ROW & --binlog-row-image=full
@@ -771,17 +777,19 @@ func (a *binlogReplicaApplier) appendRowFormatChanges(
 	}
 
 	var (
-		fields        = appender.Fields()
-		actions       = appender.Action()
-		txnTags       = appender.TxnTag()
-		txnServers    = appender.TxnServer()
-		txnGroups     = appender.TxnGroup()
-		txnSeqNumbers = appender.TxnSeqNumber()
+		fields          = appender.Fields()
+		actions         = appender.Action()
+		txnTags         = appender.TxnTag()
+		txnServers      = appender.TxnServer()
+		txnGroups       = appender.TxnGroup()
+		txnSeqNumbers   = appender.TxnSeqNumber()
+		TxnStmtOrdinals = appender.TxnStmtOrdinal()
 
-		txnTag    []byte
-		txnServer []byte
-		txnGroup  []byte
-		txnSeq    uint64
+		txnTag         []byte
+		txnServer      []byte
+		txnGroup       []byte
+		txnSeq         uint64
+		txnStmtOrdinal = a.inTxnStmtID.Load()
 	)
 
 	switch gtid := a.currentGtid.(type) {
@@ -812,6 +820,7 @@ func (a *binlogReplicaApplier) appendRowFormatChanges(
 			txnServers.Append(txnServer)
 			txnGroups.Append(txnGroup)
 			txnSeqNumbers.Append(txnSeq)
+			TxnStmtOrdinals.Append(txnStmtOrdinal)
 
 			pos := 0
 			for i := range schema {
@@ -840,6 +849,7 @@ func (a *binlogReplicaApplier) appendRowFormatChanges(
 			txnServers.Append(txnServer)
 			txnGroups.Append(txnGroup)
 			txnSeqNumbers.Append(txnSeq)
+			TxnStmtOrdinals.Append(txnStmtOrdinal)
 
 			pos := 0
 			for i := range schema {
@@ -1125,11 +1135,11 @@ func (a *binlogReplicaApplier) executeQueryWithEngine(ctx *sql.Context, engine *
 		return nil
 	}
 	for {
-		_, err := iter.Next(queryCtx)
-		if err != nil {
-			if err != io.EOF {
-				queryCtx.GetLogger().Errorf("ERROR reading query results: %v ", err.Error())
+		if _, err := iter.Next(queryCtx); err != nil {
+			if err == io.EOF {
+				return nil
 			}
+			queryCtx.GetLogger().Errorf("ERROR reading query results: %v ", err.Error())
 			return err
 		}
 	}

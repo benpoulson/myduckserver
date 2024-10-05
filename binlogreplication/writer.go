@@ -25,6 +25,7 @@ type DeltaAppender interface {
 	TxnServer() *array.BinaryDictionaryBuilder
 	TxnGroup() *array.BinaryDictionaryBuilder
 	TxnSeqNumber() *array.Uint64Builder
+	TxnStmtOrdinal() *array.Uint64Builder
 }
 
 type TableWriterProvider interface {

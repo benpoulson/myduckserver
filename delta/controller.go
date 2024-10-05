@@ -183,6 +183,8 @@ func (c *DeltaController) updateTable(
 	record := appender.Build()
 	defer record.Release()
 
+	// fmt.Println("record:", record)
+
 	// TODO(fan): Switch to zero-copy Arrow ingestion once this PR is merged:
 	//   https://github.com/marcboeker/go-duckdb/pull/283
 	w := ipc.NewWriter(buf, ipc.WithSchema(record.Schema()))
@@ -219,7 +221,7 @@ func (c *DeltaController) updateTable(
 	// FROM (
 	//   SELECT
 	//     pk1, pk2, ...,
-	//     LAST(ROW(*COLUMNS(*)) ORDER BY txn_group, txn_seq, action) AS r
+	//     LAST(ROW(*COLUMNS(*)) ORDER BY txn_group, txn_seq, txn_stmt, action) AS r
 	//   FROM delta
 	//   GROUP BY pk1, pk2, ...
 	// )
@@ -244,7 +246,7 @@ func (c *DeltaController) updateTable(
 	}
 	builder.WriteString(" FROM (SELECT ")
 	builder.WriteString(pkList)
-	builder.WriteString(", LAST(ROW(*COLUMNS(*)) ORDER BY txn_group, txn_seq, action) AS r")
+	builder.WriteString(", LAST(ROW(*COLUMNS(*)) ORDER BY txn_group, txn_seq, txn_stmt, action) AS r")
 	builder.WriteString(ipcSQL)
 	builder.WriteString(" GROUP BY ")
 	builder.WriteString(pkList)
