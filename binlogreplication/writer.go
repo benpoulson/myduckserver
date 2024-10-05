@@ -40,7 +40,7 @@ type TableWriterProvider interface {
 		foreignKeyChecksDisabled bool,
 	) (TableWriter, error)
 
-	// GetDeltaAppender returns an ArrowAppender for appending updates to the specified |table| in the specified |database|.
+	// GetDeltaAppender returns a DeltaAppender for appending updates to the specified |table| in the specified |database|.
 	GetDeltaAppender(
 		ctx *sql.Context, engine *sqle.Engine,
 		databaseName, tableName string,

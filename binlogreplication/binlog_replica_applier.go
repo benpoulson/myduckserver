@@ -66,6 +66,7 @@ type binlogReplicaApplier struct {
 	engine                *gms.Engine
 	tableWriterProvider   TableWriterProvider
 	inTxnStmtID           atomic.Uint64 // auto-incrementing ID for statements within a transaction
+	deltaBufSize          atomic.Uint64 // size of the delta buffer
 }
 
 func newBinlogReplicaApplier(filters *filterConfiguration) *binlogReplicaApplier {
@@ -327,15 +328,12 @@ func (a *binlogReplicaApplier) replicaBinlogEventHandler(ctx *sql.Context) error
 			}
 
 		case <-ticker.C:
-			if err := a.tableWriterProvider.FlushDelta(ctx, delta.TimeTickFlushReason); err != nil {
-				ctx.GetLogger().Errorf("Failed to flush changelog: %v", err.Error())
-				MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, err.Error())
-			}
+			a.flushDeltaBuffer(ctx, delta.TimeTickFlushReason)
 
 		case <-a.stopReplicationChan:
 			ctx.GetLogger().Trace("received stop replication signal")
 			eventProducer.Stop()
-			return a.tableWriterProvider.FlushDelta(ctx, delta.OnCloseFlushReason)
+			return a.flushDeltaBuffer(ctx, delta.OnCloseFlushReason)
 		}
 	}
 }
@@ -601,8 +599,14 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 			return fmt.Errorf("unable to store GTID executed metadata to disk: %s", err.Error())
 		}
 
-		// Reset the statement ID counter after a commit
+		// Reset the statement ID after a commit
 		a.inTxnStmtID.Store(0)
+
+		// Flush the delta buffer if it's grown too large
+		// TODO(fan): Make the threshold configurable
+		if a.deltaBufSize.Load() > (64 << 20) { // 64MB
+			return a.flushDeltaBuffer(ctx, delta.MemoryLimitFlushReason)
+		}
 	}
 
 	return nil
@@ -837,6 +841,7 @@ func (a *binlogReplicaApplier) appendRowFormatChanges(
 				}
 				pos += length
 			}
+			a.deltaBufSize.Add(uint64(pos))
 		}
 	}
 
@@ -866,10 +871,21 @@ func (a *binlogReplicaApplier) appendRowFormatChanges(
 				}
 				pos += length
 			}
+			a.deltaBufSize.Add(uint64(pos))
 		}
 	}
 
 	return nil
+}
+
+func (a *binlogReplicaApplier) flushDeltaBuffer(ctx *sql.Context, reason delta.FlushReason) error {
+	defer a.deltaBufSize.Store(0)
+	err := a.tableWriterProvider.FlushDelta(ctx, reason)
+	if err != nil {
+		ctx.GetLogger().Errorf("Failed to flush changelog: %v", err.Error())
+		MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, err.Error())
+	}
+	return err
 }
 
 //
@@ -1121,7 +1137,7 @@ func (a *binlogReplicaApplier) executeQueryWithEngine(ctx *sql.Context, engine *
 		flushChangelog, flushReason = true, delta.DDLStmtFlushReason
 	}
 	if flushChangelog {
-		if err := a.tableWriterProvider.FlushDelta(ctx, flushReason); err != nil {
+		if err := a.flushDeltaBuffer(ctx, flushReason); err != nil {
 			return err
 		}
 	}
