@@ -27,6 +27,8 @@ import (
 	"github.com/dolthub/vitess/go/mysql"
 )
 
+const PersistentVariableTableName = "main.persistent_variables"
+
 type Session struct {
 	*memory.Session
 	db   *catalog.DatabaseProvider
@@ -39,11 +41,6 @@ func NewSession(base *memory.Session, provider *catalog.DatabaseProvider, pool *
 
 // NewSessionBuilder returns a session builder for the given database provider.
 func NewSessionBuilder(provider *catalog.DatabaseProvider, pool *ConnectionPool) func(ctx context.Context, conn *mysql.Conn, addr string) (sql.Session, error) {
-	_, err := pool.Exec("CREATE TABLE IF NOT EXISTS main.persistent_variables (name TEXT PRIMARY KEY, value TEXT, type TEXT)")
-	if err != nil {
-		panic(err)
-	}
-
 	return func(ctx context.Context, conn *mysql.Conn, addr string) (sql.Session, error) {
 		host := ""
 		user := ""
@@ -137,7 +134,7 @@ func (sess Session) PersistGlobal(sysVarName string, value interface{}) error {
 	}
 	_, err := sess.ExecContext(
 		context.Background(),
-		"INSERT OR REPLACE INTO main.persistent_variables (name, value, vtype) VALUES (?, ?, ?)",
+		catalog.InternalTables.PersistentVariable.UpsertStmt(),
 		sysVarName, value, fmt.Sprintf("%T", value),
 	)
 	return err
@@ -147,7 +144,7 @@ func (sess Session) PersistGlobal(sysVarName string, value interface{}) error {
 func (sess Session) RemovePersistedGlobal(sysVarName string) error {
 	_, err := sess.ExecContext(
 		context.Background(),
-		"DELETE FROM main.persistent_variables WHERE name = ?",
+		catalog.InternalTables.PersistentVariable.DeleteStmt(),
 		sysVarName,
 	)
 	return err
@@ -155,7 +152,7 @@ func (sess Session) RemovePersistedGlobal(sysVarName string) error {
 
 // RemoveAllPersistedGlobals implements sql.PersistableSession.
 func (sess Session) RemoveAllPersistedGlobals() error {
-	_, err := sess.ExecContext(context.Background(), "DELETE FROM main.persistent_variables")
+	_, err := sess.ExecContext(context.Background(), "DELETE FROM "+catalog.InternalTables.PersistentVariable.Name)
 	return err
 }
 
@@ -164,7 +161,8 @@ func (sess Session) GetPersistedValue(k string) (interface{}, error) {
 	var value, vtype string
 	err := sess.QueryRow(
 		context.Background(),
-		"SELECT value, vtype FROM main.persistent_variables WHERE name = ?", k,
+		catalog.InternalTables.PersistentVariable.SelectStmt(),
+		k,
 	).Scan(&value, &vtype)
 	switch {
 	case err == stdsql.ErrNoRows:

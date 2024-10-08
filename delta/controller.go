@@ -40,6 +40,7 @@ type FlushStats struct {
 type DeltaController struct {
 	mutex    sync.Mutex
 	tables   map[tableIdentifier]*DeltaAppender
+	position string
 	pool     *backend.ConnectionPool
 	requests chan *FlushRequest
 	close    chan struct{}
@@ -72,6 +73,10 @@ func (c *DeltaController) GetDeltaAppender(
 	}
 	c.tables[id] = appender
 	return appender, nil
+}
+
+func (c *DeltaController) UpdatePosition(position string) {
+	c.position = position
 }
 
 func (c *DeltaController) Go() {
@@ -166,6 +171,11 @@ func (c *DeltaController) flush(ctx context.Context, reason FlushReason) (FlushS
 			}
 		}
 	}
+
+	if _, err := tx.ExecContext(ctx, catalog.InternalTables.BinlogPosition.UpsertStmt(), "", c.position); err != nil {
+		return FlushStats{}, err
+	}
+
 	return stats, tx.Commit()
 }
 

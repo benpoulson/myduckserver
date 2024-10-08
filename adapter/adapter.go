@@ -9,11 +9,16 @@ import (
 
 type ConnectionHolder interface {
 	GetConn(ctx context.Context) (*stdsql.Conn, error)
+	GetTxn(ctx context.Context, options *stdsql.TxOptions) (*stdsql.Tx, error)
 	GetCatalogConn(ctx context.Context) (*stdsql.Conn, error)
 }
 
 func GetConn(ctx *sql.Context) (*stdsql.Conn, error) {
 	return ctx.Session.(ConnectionHolder).GetConn(ctx)
+}
+
+func GetTxn(ctx *sql.Context, options *stdsql.TxOptions) (*stdsql.Tx, error) {
+	return ctx.Session.(ConnectionHolder).GetTxn(ctx, options)
 }
 
 func QueryContext(ctx *sql.Context, query string, args ...any) (*stdsql.Rows, error) {

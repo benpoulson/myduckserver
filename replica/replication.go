@@ -15,6 +15,7 @@ package replica
 
 import (
 	"context"
+	stdsql "database/sql"
 
 	sqle "github.com/dolthub/go-mysql-server"
 	"github.com/dolthub/go-mysql-server/memory"
@@ -65,7 +66,8 @@ type tableWriterProvider struct {
 var _ binlogreplication.TableWriterProvider = &tableWriterProvider{}
 
 func (twp *tableWriterProvider) GetTableWriter(
-	ctx *sql.Context, engine *sqle.Engine,
+	ctx *sql.Context,
+	txn *stdsql.Tx,
 	databaseName, tableName string,
 	schema sql.PrimaryKeySchema,
 	columnCount, rowCount int,
@@ -73,18 +75,19 @@ func (twp *tableWriterProvider) GetTableWriter(
 	eventType binlog.RowEventType,
 	foreignKeyChecksDisabled bool,
 ) (binlogreplication.TableWriter, error) {
-	// if eventType == binlogreplication.InsertEvent {
-	// 	return twp.newTableAppender(ctx, databaseName, tableName, columnCount)
-	// }
-	return twp.newTableUpdater(ctx, databaseName, tableName, schema, columnCount, rowCount, identifyColumns, dataColumns, eventType)
+	return twp.newTableUpdater(ctx, txn, databaseName, tableName, schema, columnCount, rowCount, identifyColumns, dataColumns, eventType)
 }
 
 func (twp *tableWriterProvider) GetDeltaAppender(
-	ctx *sql.Context, engine *sqle.Engine,
+	ctx *sql.Context,
 	databaseName, tableName string,
 	schema sql.Schema,
 ) (binlogreplication.DeltaAppender, error) {
 	return twp.controller.GetDeltaAppender(databaseName, tableName, schema)
+}
+
+func (twp *tableWriterProvider) UpdateLogPosition(position string) {
+	twp.controller.UpdatePosition(position)
 }
 
 func (twp *tableWriterProvider) FlushDelta(ctx *sql.Context, reason delta.FlushReason) error {

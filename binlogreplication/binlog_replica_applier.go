@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/apecloud/myduckserver/adapter"
 	"github.com/apecloud/myduckserver/binlog"
 	"github.com/apecloud/myduckserver/charset"
 	"github.com/apecloud/myduckserver/delta"
@@ -65,6 +66,7 @@ type binlogReplicaApplier struct {
 	running               atomic.Bool
 	engine                *gms.Engine
 	tableWriterProvider   TableWriterProvider
+	ongoingTxn            atomic.Bool   // true if we're in a transaction
 	inTxnStmtID           atomic.Uint64 // auto-incrementing ID for statements within a transaction
 	deltaBufSize          atomic.Uint64 // size of the delta buffer
 }
@@ -342,8 +344,6 @@ func (a *binlogReplicaApplier) replicaBinlogEventHandler(ctx *sql.Context) error
 // processing it.
 func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.Engine, event mysql.BinlogEvent) error {
 	var err error
-	createCommit := false
-	commitToAllDatabases := false
 
 	// We don't support checksum validation, so we MUST strip off any checksum bytes if present, otherwise it gets
 	// interpreted as part of the payload and corrupts the data. Future checksum sizes, are not guaranteed to be the
@@ -372,8 +372,7 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 		// An XID event is generated for a COMMIT of a transaction that modifies one or more tables of an
 		// XA-capable storage engine. For more details, see: https://mariadb.com/kb/en/xid_event/
 		ctx.GetLogger().Trace("Received binlog event: XID")
-		createCommit = true
-		commitToAllDatabases = true
+		return a.commit(ctx, engine)
 
 	case event.IsQuery():
 		// A Query event represents a statement executed on the source server that should be executed on the
@@ -394,13 +393,6 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 			"flags":    fmt.Sprintf("0x%x", flags),
 			"sql_mode": fmt.Sprintf("0x%x", mode),
 		}).Infoln("Received binlog event: Query")
-
-		// When executing SQL statements sent from the primary, we can't be sure what database was modified unless we
-		// look closely at the statement. For example, we could be connected to db01, but executed
-		// "create table db02.t (...);" – i.e., looking at query.Database is NOT enough to always determine the correct
-		// database that was modified, so instead, we commit to all databases when we see a Query binlog event to
-		// avoid issues with correctness, at the cost of being slightly less efficient
-		commitToAllDatabases = true
 
 		if flags&doltvtmysql.QFlagOptionAutoIsNull > 0 {
 			ctx.GetLogger().Tracef("Setting sql_auto_is_null ON")
@@ -435,11 +427,8 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 			ctx.SetSessionVariable(ctx, "unique_checks", 1)
 		}
 
-		createCommit = !strings.EqualFold(query.SQL, "begin")
-		// TODO(fan): Here we
-		//   skip the transaction for now;
-		//   skip the operations on `mysql.time_zone*` tables, which are not supported by go-mysql-server yet.
-		if createCommit && !(query.Database == "mysql" && strings.HasPrefix(query.SQL, "TRUNCATE TABLE time_zone")) {
+		// TODO(fan): Here we skip the operations on `mysql.time_zone*` tables, which are not supported by go-mysql-server yet.
+		if !(query.Database == "mysql" && strings.HasPrefix(query.SQL, "TRUNCATE TABLE time_zone")) {
 			ctx.SetCurrentDatabase(query.Database)
 			if err := a.executeQueryWithEngine(ctx, engine, query.SQL); err != nil {
 				ctx.GetLogger().WithFields(logrus.Fields{
@@ -449,6 +438,10 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 				msg := fmt.Sprintf("Applying query failed: %v", err.Error())
 				MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, msg)
 			}
+		}
+
+		if strings.EqualFold(query.SQL, "begin") {
+			a.ongoingTxn.Store(true)
 		}
 		a.inTxnStmtID.Add(1)
 
@@ -576,39 +569,31 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 		}
 	}
 
-	if createCommit {
-		// TODO(fan): Skip the transaction commit for now
-		_ = commitToAllDatabases
-		// var databasesToCommit []string
-		// if commitToAllDatabases {
-		// 	databasesToCommit = getAllUserDatabaseNames(ctx, engine)
-		// 	for _, database := range databasesToCommit {
-		// 		executeQueryWithEngine(ctx, engine, "use `"+database+"`;")
-		// 		executeQueryWithEngine(ctx, engine, "commit;")
-		// 	}
-		// }
+	return nil
+}
 
-		// Record the last GTID processed after the commit
-		a.currentPosition.GTIDSet = a.currentPosition.GTIDSet.AddGTID(a.currentGtid)
-		err := sql.SystemVariables.AssignValues(map[string]interface{}{"gtid_executed": a.currentPosition.GTIDSet.String()})
-		if err != nil {
-			ctx.GetLogger().Errorf("unable to set @@GLOBAL.gtid_executed: %s", err.Error())
-		}
-		err = positionStore.Save(ctx, engine, a.currentPosition)
-		if err != nil {
-			return fmt.Errorf("unable to store GTID executed metadata to disk: %s", err.Error())
-		}
+func (a *binlogReplicaApplier) commit(ctx *sql.Context, engine *gms.Engine) error {
+	a.executeQueryWithEngine(ctx, engine, "commit")
 
-		// Reset the statement ID after a commit
-		a.inTxnStmtID.Store(0)
-
-		// Flush the delta buffer if it's grown too large
-		// TODO(fan): Make the threshold configurable
-		if a.deltaBufSize.Load() > (64 << 20) { // 64MB
-			return a.flushDeltaBuffer(ctx, delta.MemoryLimitFlushReason)
-		}
+	// Record the last GTID processed after the commit
+	a.currentPosition.GTIDSet = a.currentPosition.GTIDSet.AddGTID(a.currentGtid)
+	err := sql.SystemVariables.AssignValues(map[string]interface{}{"gtid_executed": a.currentPosition.GTIDSet.String()})
+	if err != nil {
+		ctx.GetLogger().Errorf("unable to set @@GLOBAL.gtid_executed: %s", err.Error())
+	}
+	err = positionStore.Save(ctx, engine, a.currentPosition)
+	if err != nil {
+		return fmt.Errorf("unable to store GTID executed metadata to disk: %s", err.Error())
 	}
 
+	// Reset the statement ID after a commit
+	a.inTxnStmtID.Store(0)
+
+	// Flush the delta buffer if it's grown too large
+	// TODO(fan): Make the threshold configurable
+	if a.deltaBufSize.Load() > (64 << 20) { // 64MB
+		return a.flushDeltaBuffer(ctx, delta.MemoryLimitFlushReason)
+	}
 	return nil
 }
 
@@ -695,7 +680,7 @@ func (a *binlogReplicaApplier) processRowEvent(ctx *sql.Context, event mysql.Bin
 
 	if isRowFormat && len(pkSchema.PkOrdinals) > 0 {
 		// --binlog-format=ROW & --binlog-row-image=full
-		return a.appendRowFormatChanges(ctx, engine, tableMap, tableName, schema, eventType, &rows)
+		return a.appendRowFormatChanges(ctx, tableMap, tableName, schema, eventType, &rows)
 	} else {
 		return a.writeChanges(ctx, engine, tableMap, tableName, pkSchema, eventType, &rows, foreignKeyChecksDisabled)
 	}
@@ -734,8 +719,13 @@ func (a *binlogReplicaApplier) writeChanges(
 		dataRows = append(dataRows, dataRow)
 	}
 
+	txn, err := adapter.GetTxn(ctx, nil)
+	if err != nil {
+		return err
+	}
 	tableWriter, err := a.tableWriterProvider.GetTableWriter(
-		ctx, engine,
+		ctx,
+		txn,
 		tableMap.Database, tableName,
 		pkSchema,
 		len(tableMap.Types), len(rows.Rows),
@@ -746,7 +736,6 @@ func (a *binlogReplicaApplier) writeChanges(
 	if err != nil {
 		return err
 	}
-	defer tableWriter.Rollback()
 
 	switch event {
 	case binlog.DeleteRowEvent:
@@ -767,15 +756,15 @@ func (a *binlogReplicaApplier) writeChanges(
 		"rows":  len(rows.Rows),
 	}).Infoln("processRowEvent")
 
-	return tableWriter.Commit()
+	return nil
 }
 
 func (a *binlogReplicaApplier) appendRowFormatChanges(
-	ctx *sql.Context, engine *gms.Engine,
+	ctx *sql.Context,
 	tableMap *mysql.TableMap, tableName string, schema sql.Schema,
 	event binlog.RowEventType, rows *mysql.Rows,
 ) error {
-	appender, err := a.tableWriterProvider.GetDeltaAppender(ctx, engine, tableMap.Database, tableName, schema)
+	appender, err := a.tableWriterProvider.GetDeltaAppender(ctx, tableMap.Database, tableName, schema)
 	if err != nil {
 		return err
 	}
@@ -1129,8 +1118,8 @@ func (a *binlogReplicaApplier) executeQueryWithEngine(ctx *sql.Context, engine *
 	switch node.(type) {
 	case *plan.InsertInto, *plan.Update, *plan.DeleteFrom, *plan.LoadData:
 		flushChangelog, flushReason = true, delta.DMLStmtFlushReason
-	case *plan.DropDB,
-		*plan.DropTable, *plan.RenameTable,
+	case *plan.CreateDB, *plan.DropDB,
+		*plan.CreateTable, *plan.DropTable, *plan.RenameTable,
 		*plan.AddColumn, *plan.RenameColumn, *plan.DropColumn, *plan.ModifyColumn,
 		*plan.CreateIndex, *plan.DropIndex, *plan.AlterIndex,
 		*plan.AlterDefaultSet, *plan.AlterDefaultDrop:

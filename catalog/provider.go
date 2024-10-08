@@ -67,7 +67,16 @@ func NewDBProvider(dataDir, dbFile string) (*DatabaseProvider, error) {
 		if _, err := storage.ExecContext(context.Background(), q); err != nil {
 			storage.Close()
 			connector.Close()
-			return nil, fmt.Errorf("failed to execute boot query %q: %v", q, err)
+			return nil, fmt.Errorf("failed to execute boot query %q: %w", q, err)
+		}
+	}
+
+	for _, t := range internalTables {
+		if _, err := storage.ExecContext(
+			context.Background(),
+			"CREATE TABLE IF NOT EXISTS "+t.QualifiedName()+"("+t.DDL+")",
+		); err != nil {
+			return nil, fmt.Errorf("failed to create internal table %q: %w", t.Name, err)
 		}
 	}
 
