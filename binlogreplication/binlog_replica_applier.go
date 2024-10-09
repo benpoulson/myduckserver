@@ -28,6 +28,7 @@ import (
 	"github.com/apecloud/myduckserver/binlog"
 	"github.com/apecloud/myduckserver/charset"
 	"github.com/apecloud/myduckserver/delta"
+	"github.com/apecloud/myduckserver/mysqlutil"
 	gms "github.com/dolthub/go-mysql-server"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/binlogreplication"
@@ -66,7 +67,8 @@ type binlogReplicaApplier struct {
 	running               atomic.Bool
 	engine                *gms.Engine
 	tableWriterProvider   TableWriterProvider
-	ongoingTxn            atomic.Bool   // true if we're in a transaction
+	ongoingBatchTxn       atomic.Bool   // true if we're in a batched transaction, i.e., a series of binlog-format=ROW primary transactions
+	delayedBeginTxn       atomic.Bool   // true if there is a delayed BEGIN statement
 	inTxnStmtID           atomic.Uint64 // auto-incrementing ID for statements within a transaction
 	deltaBufSize          atomic.Uint64 // size of the delta buffer
 }
@@ -427,22 +429,15 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 			ctx.SetSessionVariable(ctx, "unique_checks", 1)
 		}
 
-		// TODO(fan): Here we skip the operations on `mysql.time_zone*` tables, which are not supported by go-mysql-server yet.
-		if !(query.Database == "mysql" && strings.HasPrefix(query.SQL, "TRUNCATE TABLE time_zone")) {
-			ctx.SetCurrentDatabase(query.Database)
-			if err := a.executeQueryWithEngine(ctx, engine, query.SQL); err != nil {
-				ctx.GetLogger().WithFields(logrus.Fields{
-					"error": err.Error(),
-					"query": query.SQL,
-				}).Errorf("Applying query failed")
-				msg := fmt.Sprintf("Applying query failed: %v", err.Error())
-				MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, msg)
-			}
+		if err := a.executeQueryWithEngine(ctx, engine, query); err != nil {
+			ctx.GetLogger().WithFields(logrus.Fields{
+				"error": err.Error(),
+				"query": query.SQL,
+			}).Errorf("Applying query failed")
+			msg := fmt.Sprintf("Applying query failed: %v", err.Error())
+			MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, msg)
 		}
 
-		if strings.EqualFold(query.SQL, "begin") {
-			a.ongoingTxn.Store(true)
-		}
 		a.inTxnStmtID.Add(1)
 
 	case event.IsRotate():
@@ -572,8 +567,24 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 	return nil
 }
 
+func (a *binlogReplicaApplier) begin(ctx *sql.Context, engine *gms.Engine) error {
+	a.delayedBeginTxn.Store(false)
+	subctx := sql.NewContext(ctx, sql.WithSession(ctx.Session)).WithQuery("BEGIN")
+	if err := a.execute(subctx, engine, "BEGIN"); err != nil {
+		subctx.GetLogger().Errorf("Failed to begin the transaction: %v", err.Error())
+		MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, err.Error())
+		return err
+	}
+	return nil
+}
+
 func (a *binlogReplicaApplier) commit(ctx *sql.Context, engine *gms.Engine) error {
-	a.executeQueryWithEngine(ctx, engine, "commit")
+	subctx := sql.NewContext(ctx, sql.WithSession(ctx.Session)).WithQuery("COMMIT")
+	if err := a.execute(subctx, engine, "COMMIT"); err != nil {
+		subctx.GetLogger().Errorf("Failed to commit the transaction: %v", err.Error())
+		MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, err.Error())
+		return err
+	}
 
 	// Record the last GTID processed after the commit
 	a.currentPosition.GTIDSet = a.currentPosition.GTIDSet.AddGTID(a.currentGtid)
@@ -595,6 +606,128 @@ func (a *binlogReplicaApplier) commit(ctx *sql.Context, engine *gms.Engine) erro
 		return a.flushDeltaBuffer(ctx, delta.MemoryLimitFlushReason)
 	}
 	return nil
+}
+
+// executeQueryWithEngine executes a query against the engine and returns an error if the query failed.
+func (a *binlogReplicaApplier) executeQueryWithEngine(ctx *sql.Context, engine *gms.Engine, query mysql.Query) error {
+	// TODO(fan): Here we skip the operations on `mysql.time_zone*` tables, which are not supported by go-mysql-server yet.
+	if query.Database == "mysql" && strings.HasPrefix(query.SQL, "TRUNCATE TABLE time_zone") {
+		return a.commit(ctx, engine)
+	}
+
+	// Create a sub-context when running queries against the engine, so that we get an accurate query start time.
+	queryCtx := sql.NewContext(ctx, sql.WithSession(ctx.Session)).WithQuery(query.SQL)
+	queryCtx.SetCurrentDatabase(query.Database)
+	if queryCtx.GetCurrentDatabase() == "" {
+		ctx.GetLogger().WithField("query", query).Warn("No current database selected")
+	}
+
+	// Analyze the query first to check if it's a DDL or DML statement,
+	// and flush the changelog if necessary.
+	var (
+		causeCommit    bool
+		flushChangelog bool
+		flushReason    delta.FlushReason
+	)
+	node, err := engine.PrepareQuery(queryCtx, query.SQL)
+	if err != nil {
+		return err
+	}
+	ctx.GetLogger().WithFields(logrus.Fields{
+		"query":           query,
+		"db":              queryCtx.GetCurrentDatabase(),
+		"ongoingBatchTxn": a.ongoingBatchTxn.Load(),
+		"delayedBeginTxn": a.delayedBeginTxn.Load(),
+	}).Infof("Executing %T query", node)
+	switch node.(type) {
+	case *plan.StartTransaction:
+		if a.ongoingBatchTxn.Load() {
+			// If we're in a batched transaction, then we don't want to start a new transaction yet.
+			a.delayedBeginTxn.Store(true)
+			return nil
+		}
+		causeCommit, flushChangelog, flushReason = true, true, delta.UnknownFlushReason
+
+	case *plan.Commit:
+		if a.ongoingBatchTxn.Load() {
+			// If we're in a batched transaction, then we don't want to commit yet.
+			return nil
+		}
+		causeCommit, flushChangelog, flushReason = true, true, delta.UnknownFlushReason
+
+	case *plan.InsertInto, *plan.Update, *plan.DeleteFrom, *plan.LoadData:
+		causeCommit, flushChangelog, flushReason = false, true, delta.DMLStmtFlushReason
+
+	default:
+		if mysqlutil.CauseImplicitCommitBefore(node) {
+			causeCommit, flushChangelog, flushReason = true, true, delta.UnknownFlushReason
+		}
+		if mysqlutil.CauseSchemaChange(node) {
+			flushReason = delta.DDLStmtFlushReason
+		}
+	}
+
+	if flushChangelog {
+		// Flush the buffered changes in a separate transaction
+		if err := a.flushDeltaBuffer(ctx, flushReason); err != nil {
+			return err
+		}
+	}
+
+	if a.delayedBeginTxn.Load() {
+		// Begin the delayed transaction before executing the query
+		if err := a.begin(ctx, engine); err != nil {
+			return err
+		}
+	}
+
+	if causeCommit {
+		// Commit the previous transaction before executing the query.
+		if err := a.commit(ctx, engine); err != nil {
+			return err
+		}
+	}
+
+	switch node.(type) {
+	case *plan.StartTransaction:
+		a.delayedBeginTxn.Store(true)
+		a.ongoingBatchTxn.Store(true)
+		return nil
+	case *plan.Commit:
+		return nil // already committed
+	}
+
+	a.ongoingBatchTxn.Store(false)
+	if err := a.execute(queryCtx, engine, query.SQL); err != nil {
+		return err
+	}
+
+	if mysqlutil.CauseImplicitCommitAfter(node) {
+		// Commit the transaction after executing the query
+		return a.commit(ctx, engine)
+	}
+
+	return nil
+}
+
+func (a *binlogReplicaApplier) execute(ctx *sql.Context, engine *gms.Engine, query string) error {
+	_, iter, _, err := engine.Query(ctx, query)
+	if err != nil {
+		// Log any errors, except for commits with "nothing to commit"
+		if err.Error() != "nothing to commit" {
+			return err
+		}
+		return nil
+	}
+	for {
+		if _, err := iter.Next(ctx); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			ctx.GetLogger().Errorf("ERROR reading query results: %v ", err.Error())
+			return err
+		}
+	}
 }
 
 // processRowEvent processes a WriteRows, DeleteRows, or UpdateRows binlog event and returns an error if any problems
@@ -678,10 +811,11 @@ func (a *binlogReplicaApplier) processRowEvent(ctx *sql.Context, event mysql.Bin
 	}
 	ctx.GetLogger().Infof(" - %s Rows (db: %s, table: %s, row format: %v, row count: %v)", eventType, tableMap.Database, tableName, isRowFormat, len(rows.Rows))
 
-	if isRowFormat && len(pkSchema.PkOrdinals) > 0 {
+	if isRowFormat && len(pkSchema.PkOrdinals) > 0 && a.ongoingBatchTxn.Load() {
 		// --binlog-format=ROW & --binlog-row-image=full
 		return a.appendRowFormatChanges(ctx, tableMap, tableName, schema, eventType, &rows)
 	} else {
+		a.ongoingBatchTxn.Store(false)
 		return a.writeChanges(ctx, engine, tableMap, tableName, pkSchema, eventType, &rows, foreignKeyChecksDisabled)
 	}
 }
@@ -1089,65 +1223,6 @@ func loadReplicaServerId() (uint32, error) {
 	}
 
 	return serverId, nil
-}
-
-func (a *binlogReplicaApplier) executeQueryWithEngine(ctx *sql.Context, engine *gms.Engine, query string) error {
-	// Create a sub-context when running queries against the engine, so that we get an accurate query start time.
-	queryCtx := sql.NewContext(ctx, sql.WithSession(ctx.Session)).WithQuery(query)
-
-	if queryCtx.GetCurrentDatabase() == "" {
-		ctx.GetLogger().WithFields(logrus.Fields{
-			"query": query,
-		}).Warn("No current database selected")
-	}
-
-	// Analyze the query first to check if it's a DDL or DML statement,
-	// and flush the changelog if necessary.
-	node, err := engine.PrepareQuery(queryCtx, query)
-	if err != nil {
-		return err
-	}
-	ctx.GetLogger().WithFields(logrus.Fields{
-		"query": query,
-		"db":    queryCtx.GetCurrentDatabase(),
-	}).Infof("Executing %T query", node)
-	var (
-		flushChangelog bool
-		flushReason    delta.FlushReason
-	)
-	switch node.(type) {
-	case *plan.InsertInto, *plan.Update, *plan.DeleteFrom, *plan.LoadData:
-		flushChangelog, flushReason = true, delta.DMLStmtFlushReason
-	case *plan.CreateDB, *plan.DropDB,
-		*plan.CreateTable, *plan.DropTable, *plan.RenameTable,
-		*plan.AddColumn, *plan.RenameColumn, *plan.DropColumn, *plan.ModifyColumn,
-		*plan.CreateIndex, *plan.DropIndex, *plan.AlterIndex,
-		*plan.AlterDefaultSet, *plan.AlterDefaultDrop:
-		flushChangelog, flushReason = true, delta.DDLStmtFlushReason
-	}
-	if flushChangelog {
-		if err := a.flushDeltaBuffer(ctx, flushReason); err != nil {
-			return err
-		}
-	}
-
-	_, iter, _, err := engine.Query(queryCtx, query)
-	if err != nil {
-		// Log any errors, except for commits with "nothing to commit"
-		if err.Error() != "nothing to commit" {
-			return err
-		}
-		return nil
-	}
-	for {
-		if _, err := iter.Next(queryCtx); err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			queryCtx.GetLogger().Errorf("ERROR reading query results: %v ", err.Error())
-			return err
-		}
-	}
 }
 
 //
