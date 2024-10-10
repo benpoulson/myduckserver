@@ -66,11 +66,14 @@ type binlogReplicaApplier struct {
 	filters               *filterConfiguration
 	running               atomic.Bool
 	engine                *gms.Engine
-	tableWriterProvider   TableWriterProvider
-	ongoingBatchTxn       atomic.Bool   // true if we're in a batched transaction, i.e., a series of binlog-format=ROW primary transactions
-	dirtyTxn              atomic.Bool   // true if we're in a transaction that has uncommited changes
-	inTxnStmtID           atomic.Uint64 // auto-incrementing ID for statements within a transaction
-	deltaBufSize          atomic.Uint64 // size of the delta buffer
+
+	tableWriterProvider TableWriterProvider
+	pendingPosition     replication.Position
+	ongoingBatchTxn     atomic.Bool   // true if we're in a batched transaction, i.e., a series of binlog-format=ROW primary transactions
+	dirtyTxn            atomic.Bool   // true if we're in a transaction that is opened and/or has uncommited changes
+	inTxnStmtID         atomic.Uint64 // auto-incrementing ID for statements within a transaction
+	deltaBufSize        atomic.Uint64 // size of the delta buffer
+	lastCommitTime      time.Time     // time of the last commit
 }
 
 func newBinlogReplicaApplier(filters *filterConfiguration) *binlogReplicaApplier {
@@ -280,7 +283,7 @@ func (a *binlogReplicaApplier) replicaBinlogEventHandler(ctx *sql.Context) error
 	var conn *mysql.Conn
 	var eventProducer *binlogEventProducer
 
-	ticker := time.NewTicker(time.Minute)
+	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 
 	// Process binlog events
@@ -332,7 +335,15 @@ func (a *binlogReplicaApplier) replicaBinlogEventHandler(ctx *sql.Context) error
 			}
 
 		case <-ticker.C:
-			a.flushDeltaBuffer(ctx, delta.TimeTickFlushReason)
+			if a.ongoingBatchTxn.Load() && !a.dirtyTxn.Load() {
+				// We should commit the transaction to flush the changes to the database
+				// if we're in a batched transaction and haven't seen any changes for a while.
+				err := a.extendOrCommitBatchTxn(ctx, engine)
+				if err != nil {
+					ctx.GetLogger().Errorf("unexpected error of type %T: '%v'", err, err.Error())
+					MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, err.Error())
+				}
+			}
 
 		case <-a.stopReplicationChan:
 			ctx.GetLogger().Trace("received stop replication signal")
@@ -353,7 +364,7 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 	// tells us if checksums are enabled and what algorithm they use. We can NOT strip the checksum off of
 	// FormatDescription events, because FormatDescription always includes a CRC32 checksum, and Vitess depends on
 	// those bytes always being present when we parse the event into a FormatDescription type.
-	if a.format != nil && event.IsFormatDescription() == false {
+	if a.format != nil && !event.IsFormatDescription() {
 		var err error
 		event, _, err = event.StripChecksum(*a.format)
 		if err != nil {
@@ -374,7 +385,7 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 		// An XID event is generated for a COMMIT of a transaction that modifies one or more tables of an
 		// XA-capable storage engine. For more details, see: https://mariadb.com/kb/en/xid_event/
 		ctx.GetLogger().Trace("Received binlog event: XID")
-		return a.extendBatchTxn(ctx, engine)
+		return a.extendOrCommitBatchTxn(ctx, engine)
 
 	case event.IsQuery():
 		// A Query event represents a statement executed on the source server that should be executed on the
@@ -437,7 +448,6 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 			msg := fmt.Sprintf("Applying query failed: %v", err.Error())
 			MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, msg)
 		}
-
 		a.inTxnStmtID.Add(1)
 
 	case event.IsRotate():
@@ -583,7 +593,7 @@ func (a *binlogReplicaApplier) commitOngoingTxn(ctx *sql.Context, engine *gms.En
 	// If the commit is caused implicitly (by, e.g., a BEGIN statment or a DDL statement),
 	// then we don't want to update the saved position to include the current GTID.
 	if !implicit {
-		a.currentPosition = replication.AppendGTID(a.currentPosition, a.currentGtid)
+		a.currentPosition = replication.AppendGTID(a.pendingPosition, a.currentGtid)
 	}
 	if err := positionStore.Save(ctx, engine, a.currentPosition); err != nil {
 		return fmt.Errorf("unable to store GTID executed metadata to disk: %s", err.Error())
@@ -598,11 +608,15 @@ func (a *binlogReplicaApplier) commitOngoingTxn(ctx *sql.Context, engine *gms.En
 	// --- Update the in-memory states ---
 
 	// Reset the statement ID
-	a.inTxnStmtID.Store(0)
 
-	// Reset ongoing batch transaction flag
+	// Reset the transaction-related flags
+	a.pendingPosition = a.currentPosition
 	a.ongoingBatchTxn.Store(true)
 	a.dirtyTxn.Store(false)
+	a.inTxnStmtID.Store(0)
+
+	// Record the time of the last commit
+	a.lastCommitTime = time.Now()
 
 	// Expose the last GTID executed as a system variable
 	err := sql.SystemVariables.AssignValues(map[string]interface{}{"gtid_executed": a.currentPosition.GTIDSet.String()})
@@ -613,10 +627,12 @@ func (a *binlogReplicaApplier) commitOngoingTxn(ctx *sql.Context, engine *gms.En
 	return nil
 }
 
-func (a *binlogReplicaApplier) extendBatchTxn(ctx *sql.Context, engine *gms.Engine) error {
+func (a *binlogReplicaApplier) extendOrCommitBatchTxn(ctx *sql.Context, engine *gms.Engine) error {
 	// If we're in a batched transaction, then we don't want to commit yet.
 	if a.ongoingBatchTxn.Load() {
-		return nil
+		if time.Since(a.lastCommitTime) < 200*time.Millisecond {
+			a.pendingPosition = replication.AppendGTID(a.pendingPosition, a.currentGtid)
+		}
 	}
 
 	return a.commitOngoingTxn(ctx, engine, false)
@@ -661,7 +677,7 @@ func (a *binlogReplicaApplier) executeQueryWithEngine(ctx *sql.Context, engine *
 		implicitCommit, flushChangelog, flushReason = true, true, delta.UnknownFlushReason
 
 	case *plan.Commit:
-		return a.extendBatchTxn(subctx, engine)
+		return a.extendOrCommitBatchTxn(subctx, engine)
 
 	case *plan.InsertInto, *plan.Update, *plan.DeleteFrom, *plan.LoadData:
 		implicitCommit, flushChangelog, flushReason = false, true, delta.DMLStmtFlushReason
