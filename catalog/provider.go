@@ -126,7 +126,7 @@ func (prov *DatabaseProvider) AllDatabases(ctx *sql.Context) []sql.Database {
 	prov.mu.RLock()
 	defer prov.mu.RUnlock()
 
-	rows, err := adapter.QueryCatalogContext(ctx, "SELECT DISTINCT schema_name FROM information_schema.schemata WHERE catalog_name = ?", prov.catalogName)
+	rows, err := adapter.QueryCatalog(ctx, "SELECT DISTINCT schema_name FROM information_schema.schemata WHERE catalog_name = ?", prov.catalogName)
 	if err != nil {
 		panic(ErrDuckDB.New(err))
 	}
@@ -184,7 +184,7 @@ func (prov *DatabaseProvider) HasDatabase(ctx *sql.Context, name string) bool {
 }
 
 func hasDatabase(ctx *sql.Context, catalog string, name string) (bool, error) {
-	rows, err := adapter.QueryCatalogContext(ctx, "SELECT DISTINCT schema_name FROM information_schema.schemata WHERE catalog_name = ? AND schema_name ILIKE ?", catalog, name)
+	rows, err := adapter.QueryCatalog(ctx, "SELECT DISTINCT schema_name FROM information_schema.schemata WHERE catalog_name = ? AND schema_name ILIKE ?", catalog, name)
 	if err != nil {
 		return false, ErrDuckDB.New(err)
 	}
@@ -197,7 +197,7 @@ func (prov *DatabaseProvider) CreateDatabase(ctx *sql.Context, name string) erro
 	prov.mu.Lock()
 	defer prov.mu.Unlock()
 
-	_, err := adapter.ExecCatalogContext(ctx, fmt.Sprintf(`CREATE SCHEMA %s`, FullSchemaName(prov.catalogName, name)))
+	_, err := adapter.ExecCatalog(ctx, fmt.Sprintf(`CREATE SCHEMA %s`, FullSchemaName(prov.catalogName, name)))
 	if err != nil {
 		return ErrDuckDB.New(err)
 	}
@@ -210,7 +210,7 @@ func (prov *DatabaseProvider) DropDatabase(ctx *sql.Context, name string) error 
 	prov.mu.Lock()
 	defer prov.mu.Unlock()
 
-	_, err := adapter.ExecContext(ctx, fmt.Sprintf(`DROP SCHEMA %s CASCADE`, FullSchemaName(prov.catalogName, name)))
+	_, err := adapter.Exec(ctx, fmt.Sprintf(`DROP SCHEMA %s CASCADE`, FullSchemaName(prov.catalogName, name)))
 	if err != nil {
 		return ErrDuckDB.New(err)
 	}

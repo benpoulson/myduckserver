@@ -20,17 +20,6 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-type FlushRequest struct {
-	Reason FlushReason
-	Done   chan *FlushResponse
-}
-
-type FlushResponse struct {
-	Reason FlushReason
-	Stats  FlushStats
-	Err    error
-}
-
 type FlushStats struct {
 	DeltaSize int64
 	Inserts   int64
@@ -42,16 +31,12 @@ type DeltaController struct {
 	tables   map[tableIdentifier]*DeltaAppender
 	position string
 	pool     *backend.ConnectionPool
-	requests chan *FlushRequest
-	close    chan struct{}
 }
 
 func NewController(pool *backend.ConnectionPool) *DeltaController {
 	return &DeltaController{
-		pool:     pool,
-		tables:   make(map[tableIdentifier]*DeltaAppender),
-		requests: make(chan *FlushRequest, 16),
-		close:    make(chan struct{}, 1),
+		pool:   pool,
+		tables: make(map[tableIdentifier]*DeltaAppender),
 	}
 }
 
@@ -79,42 +64,17 @@ func (c *DeltaController) UpdatePosition(position string) {
 	c.position = position
 }
 
-func (c *DeltaController) Go() {
-	go c.run()
-}
-
-func (c *DeltaController) run() {
-	for {
-		select {
-		case req := <-c.requests:
-			stats, err := c.flush(context.Background(), req.Reason)
-			req.Done <- &FlushResponse{
-				Reason: req.Reason,
-				Stats:  stats,
-				Err:    err,
-			}
-		case <-c.close:
-			return
-		}
-	}
-}
-
 func (c *DeltaController) Close() {
-	c.close <- struct{}{}
-}
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
 
-func (c *DeltaController) Flush(ctx context.Context, reason FlushReason) error {
-	done := make(chan *FlushResponse)
-	c.requests <- &FlushRequest{
-		Reason: reason,
-		Done:   done,
+	for _, da := range c.tables {
+		da.appender.Release()
 	}
-	resp := <-done
-	return resp.Err
 }
 
 // Flush writes the accumulated changes to the database.
-func (c *DeltaController) flush(ctx context.Context, reason FlushReason) (FlushStats, error) {
+func (c *DeltaController) Flush(ctx context.Context, tx *stdsql.Tx, reason FlushReason) (FlushStats, error) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
@@ -139,13 +99,6 @@ func (c *DeltaController) flush(ctx context.Context, reason FlushReason) (FlushS
 	// See:
 	//  https://duckdb.org/docs/sql/indexes.html#limitations-of-art-indexes
 	//  https://github.com/duckdb/duckdb/issues/14133
-
-	tx, err := c.pool.Begin()
-	if err != nil {
-		return FlushStats{}, err
-	}
-	defer tx.Rollback()
-
 	var (
 		// Share the buffer among all tables.
 		buf   bytes.Buffer
@@ -172,11 +125,8 @@ func (c *DeltaController) flush(ctx context.Context, reason FlushReason) (FlushS
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, catalog.InternalTables.BinlogPosition.UpsertStmt(), "", c.position); err != nil {
-		return FlushStats{}, err
-	}
-
-	return stats, tx.Commit()
+	_, err := tx.ExecContext(ctx, catalog.InternalTables.BinlogPosition.UpsertStmt(), "", c.position)
+	return stats, err
 }
 
 func (c *DeltaController) updateTable(

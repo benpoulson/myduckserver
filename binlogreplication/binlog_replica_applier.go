@@ -68,7 +68,7 @@ type binlogReplicaApplier struct {
 	engine                *gms.Engine
 	tableWriterProvider   TableWriterProvider
 	ongoingBatchTxn       atomic.Bool   // true if we're in a batched transaction, i.e., a series of binlog-format=ROW primary transactions
-	delayedBeginTxn       atomic.Bool   // true if there is a delayed BEGIN statement
+	dirtyTxn              atomic.Bool   // true if we're in a transaction that has uncommited changes
 	inTxnStmtID           atomic.Uint64 // auto-incrementing ID for statements within a transaction
 	deltaBufSize          atomic.Uint64 // size of the delta buffer
 }
@@ -198,7 +198,7 @@ func (a *binlogReplicaApplier) startReplicationEventStream(ctx *sql.Context, con
 		return err
 	}
 
-	position, err := positionStore.Load(a.engine)
+	position, err := positionStore.Load(ctx, a.engine)
 	if err != nil {
 		return err
 	}
@@ -374,7 +374,7 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 		// An XID event is generated for a COMMIT of a transaction that modifies one or more tables of an
 		// XA-capable storage engine. For more details, see: https://mariadb.com/kb/en/xid_event/
 		ctx.GetLogger().Trace("Received binlog event: XID")
-		return a.commit(ctx, engine)
+		return a.extendBatchTxn(ctx, engine)
 
 	case event.IsQuery():
 		// A Query event represents a statement executed on the source server that should be executed on the
@@ -481,7 +481,9 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 			return err
 		}
 		if isBegin {
-			ctx.GetLogger().Errorf("unsupported binlog protocol message: GTID event with 'isBegin' set to true")
+			if err := a.executeQueryWithEngine(ctx, engine, mysql.Query{SQL: "BEGIN"}); err != nil {
+				return err
+			}
 		}
 		ctx.GetLogger().WithFields(logrus.Fields{
 			"gtid":    gtid,
@@ -545,6 +547,7 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 		if err != nil {
 			return err
 		}
+		a.dirtyTxn.Store(true)
 		a.inTxnStmtID.Add(1)
 
 	default:
@@ -567,100 +570,105 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 	return nil
 }
 
-func (a *binlogReplicaApplier) begin(ctx *sql.Context, engine *gms.Engine) error {
-	a.delayedBeginTxn.Store(false)
-	subctx := sql.NewContext(ctx, sql.WithSession(ctx.Session)).WithQuery("BEGIN")
-	if err := a.execute(subctx, engine, "BEGIN"); err != nil {
-		subctx.GetLogger().Errorf("Failed to begin the transaction: %v", err.Error())
-		MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, err.Error())
-		return err
+func (a *binlogReplicaApplier) commitOngoingTxn(ctx *sql.Context, engine *gms.Engine, implicit bool) error {
+	// Flush the delta buffer if it's grown too large
+	// TODO(fan): Make the threshold configurable
+	if a.deltaBufSize.Load() > (64 << 20) { // 64MB
+		if err := a.flushDeltaBuffer(ctx, delta.MemoryLimitFlushReason); err != nil {
+			return err
+		}
 	}
-	return nil
-}
 
-func (a *binlogReplicaApplier) commit(ctx *sql.Context, engine *gms.Engine) error {
+	// Record the last GTID processed.
+	// If the commit is caused implicitly (by, e.g., a BEGIN statment or a DDL statement),
+	// then we don't want to update the saved position to include the current GTID.
+	if !implicit {
+		a.currentPosition = replication.AppendGTID(a.currentPosition, a.currentGtid)
+	}
+	if err := positionStore.Save(ctx, engine, a.currentPosition); err != nil {
+		return fmt.Errorf("unable to store GTID executed metadata to disk: %s", err.Error())
+	}
+
+	// Commit the underlying transaction
 	subctx := sql.NewContext(ctx, sql.WithSession(ctx.Session)).WithQuery("COMMIT")
 	if err := a.execute(subctx, engine, "COMMIT"); err != nil {
-		subctx.GetLogger().Errorf("Failed to commit the transaction: %v", err.Error())
-		MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, err.Error())
 		return err
 	}
 
-	// Record the last GTID processed after the commit
-	a.currentPosition.GTIDSet = a.currentPosition.GTIDSet.AddGTID(a.currentGtid)
+	// --- Update the in-memory states ---
+
+	// Reset the statement ID
+	a.inTxnStmtID.Store(0)
+
+	// Reset ongoing batch transaction flag
+	a.ongoingBatchTxn.Store(true)
+	a.dirtyTxn.Store(false)
+
+	// Expose the last GTID executed as a system variable
 	err := sql.SystemVariables.AssignValues(map[string]interface{}{"gtid_executed": a.currentPosition.GTIDSet.String()})
 	if err != nil {
 		ctx.GetLogger().Errorf("unable to set @@GLOBAL.gtid_executed: %s", err.Error())
 	}
-	err = positionStore.Save(ctx, engine, a.currentPosition)
-	if err != nil {
-		return fmt.Errorf("unable to store GTID executed metadata to disk: %s", err.Error())
-	}
 
-	// Reset the statement ID after a commit
-	a.inTxnStmtID.Store(0)
-
-	// Flush the delta buffer if it's grown too large
-	// TODO(fan): Make the threshold configurable
-	if a.deltaBufSize.Load() > (64 << 20) { // 64MB
-		return a.flushDeltaBuffer(ctx, delta.MemoryLimitFlushReason)
-	}
 	return nil
+}
+
+func (a *binlogReplicaApplier) extendBatchTxn(ctx *sql.Context, engine *gms.Engine) error {
+	// If we're in a batched transaction, then we don't want to commit yet.
+	if a.ongoingBatchTxn.Load() {
+		return nil
+	}
+
+	return a.commitOngoingTxn(ctx, engine, false)
 }
 
 // executeQueryWithEngine executes a query against the engine and returns an error if the query failed.
 func (a *binlogReplicaApplier) executeQueryWithEngine(ctx *sql.Context, engine *gms.Engine, query mysql.Query) error {
 	// TODO(fan): Here we skip the operations on `mysql.time_zone*` tables, which are not supported by go-mysql-server yet.
 	if query.Database == "mysql" && strings.HasPrefix(query.SQL, "TRUNCATE TABLE time_zone") {
-		return a.commit(ctx, engine)
+		return a.commitOngoingTxn(ctx, engine, false)
 	}
 
 	// Create a sub-context when running queries against the engine, so that we get an accurate query start time.
-	queryCtx := sql.NewContext(ctx, sql.WithSession(ctx.Session)).WithQuery(query.SQL)
-	queryCtx.SetCurrentDatabase(query.Database)
-	if queryCtx.GetCurrentDatabase() == "" {
+	subctx := sql.NewContext(ctx, sql.WithSession(ctx.Session)).WithQuery(query.SQL)
+	subctx.SetCurrentDatabase(query.Database)
+	if subctx.GetCurrentDatabase() == "" {
 		ctx.GetLogger().WithField("query", query).Warn("No current database selected")
 	}
 
 	// Analyze the query first to check if it's a DDL or DML statement,
 	// and flush the changelog if necessary.
 	var (
-		causeCommit    bool
+		implicitCommit bool
 		flushChangelog bool
 		flushReason    delta.FlushReason
 	)
-	node, err := engine.PrepareQuery(queryCtx, query.SQL)
+	node, err := engine.PrepareQuery(subctx, query.SQL)
 	if err != nil {
 		return err
 	}
 	ctx.GetLogger().WithFields(logrus.Fields{
 		"query":           query,
-		"db":              queryCtx.GetCurrentDatabase(),
+		"db":              subctx.GetCurrentDatabase(),
 		"ongoingBatchTxn": a.ongoingBatchTxn.Load(),
-		"delayedBeginTxn": a.delayedBeginTxn.Load(),
 	}).Infof("Executing %T query", node)
 	switch node.(type) {
 	case *plan.StartTransaction:
 		if a.ongoingBatchTxn.Load() {
 			// If we're in a batched transaction, then we don't want to start a new transaction yet.
-			a.delayedBeginTxn.Store(true)
 			return nil
 		}
-		causeCommit, flushChangelog, flushReason = true, true, delta.UnknownFlushReason
+		implicitCommit, flushChangelog, flushReason = true, true, delta.UnknownFlushReason
 
 	case *plan.Commit:
-		if a.ongoingBatchTxn.Load() {
-			// If we're in a batched transaction, then we don't want to commit yet.
-			return nil
-		}
-		causeCommit, flushChangelog, flushReason = true, true, delta.UnknownFlushReason
+		return a.extendBatchTxn(subctx, engine)
 
 	case *plan.InsertInto, *plan.Update, *plan.DeleteFrom, *plan.LoadData:
-		causeCommit, flushChangelog, flushReason = false, true, delta.DMLStmtFlushReason
+		implicitCommit, flushChangelog, flushReason = false, true, delta.DMLStmtFlushReason
 
 	default:
 		if mysqlutil.CauseImplicitCommitBefore(node) {
-			causeCommit, flushChangelog, flushReason = true, true, delta.UnknownFlushReason
+			implicitCommit, flushChangelog, flushReason = true, true, delta.UnknownFlushReason
 		}
 		if mysqlutil.CauseSchemaChange(node) {
 			flushReason = delta.DDLStmtFlushReason
@@ -674,37 +682,29 @@ func (a *binlogReplicaApplier) executeQueryWithEngine(ctx *sql.Context, engine *
 		}
 	}
 
-	if a.delayedBeginTxn.Load() {
-		// Begin the delayed transaction before executing the query
-		if err := a.begin(ctx, engine); err != nil {
+	if implicitCommit && a.dirtyTxn.Load() {
+		// Commit the previous transaction before executing the query.
+		if err := a.commitOngoingTxn(ctx, engine, true); err != nil {
 			return err
 		}
 	}
 
-	if causeCommit {
-		// Commit the previous transaction before executing the query.
-		if err := a.commit(ctx, engine); err != nil {
-			return err
-		}
+	if err := a.execute(subctx, engine, query.SQL); err != nil {
+		return err
 	}
+
+	a.dirtyTxn.Store(true)
 
 	switch node.(type) {
 	case *plan.StartTransaction:
-		a.delayedBeginTxn.Store(true)
 		a.ongoingBatchTxn.Store(true)
-		return nil
-	case *plan.Commit:
-		return nil // already committed
-	}
-
-	a.ongoingBatchTxn.Store(false)
-	if err := a.execute(queryCtx, engine, query.SQL); err != nil {
-		return err
+	default:
+		a.ongoingBatchTxn.Store(false)
 	}
 
 	if mysqlutil.CauseImplicitCommitAfter(node) {
 		// Commit the transaction after executing the query
-		return a.commit(ctx, engine)
+		return a.commitOngoingTxn(ctx, engine, true)
 	}
 
 	return nil
@@ -811,7 +811,7 @@ func (a *binlogReplicaApplier) processRowEvent(ctx *sql.Context, event mysql.Bin
 	}
 	ctx.GetLogger().Infof(" - %s Rows (db: %s, table: %s, row format: %v, row count: %v)", eventType, tableMap.Database, tableName, isRowFormat, len(rows.Rows))
 
-	if isRowFormat && len(pkSchema.PkOrdinals) > 0 && a.ongoingBatchTxn.Load() {
+	if isRowFormat && len(pkSchema.PkOrdinals) > 0 {
 		// --binlog-format=ROW & --binlog-row-image=full
 		return a.appendRowFormatChanges(ctx, tableMap, tableName, schema, eventType, &rows)
 	} else {
@@ -1002,9 +1002,14 @@ func (a *binlogReplicaApplier) appendRowFormatChanges(
 }
 
 func (a *binlogReplicaApplier) flushDeltaBuffer(ctx *sql.Context, reason delta.FlushReason) error {
-	defer a.deltaBufSize.Store(0)
-	err := a.tableWriterProvider.FlushDelta(ctx, reason)
+	tx, err := adapter.GetTxn(ctx, nil)
 	if err != nil {
+		return err
+	}
+
+	defer a.deltaBufSize.Store(0)
+
+	if err = a.tableWriterProvider.FlushDelta(ctx, tx, reason); err != nil {
 		ctx.GetLogger().Errorf("Failed to flush changelog: %v", err.Error())
 		MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, err.Error())
 	}

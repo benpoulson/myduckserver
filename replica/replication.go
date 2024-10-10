@@ -43,12 +43,9 @@ func RegisterReplicaController(provider *catalog.DatabaseProvider, engine *sqle.
 
 	twp := &tableWriterProvider{pool: pool}
 	twp.controller = delta.NewController(pool)
-	twp.controller.Go()
 
 	replica.SetTableWriterProvider(twp)
-	builder.FlushDeltaBuffer = func() error {
-		return twp.FlushDelta(ctx, delta.QueryFlushReason)
-	}
+	builder.FlushDeltaBuffer = nil // TODO: implement this
 
 	engine.Analyzer.Catalog.BinlogReplicaController = binlogreplication.MyBinlogReplicaController
 
@@ -90,6 +87,7 @@ func (twp *tableWriterProvider) UpdateLogPosition(position string) {
 	twp.controller.UpdatePosition(position)
 }
 
-func (twp *tableWriterProvider) FlushDelta(ctx *sql.Context, reason delta.FlushReason) error {
-	return twp.controller.Flush(ctx, reason)
+func (twp *tableWriterProvider) FlushDelta(ctx *sql.Context, tx *stdsql.Tx, reason delta.FlushReason) error {
+	_, err := twp.controller.Flush(ctx, tx, reason)
+	return err
 }

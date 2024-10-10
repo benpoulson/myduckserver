@@ -50,5 +50,5 @@ type TableWriterProvider interface {
 	UpdateLogPosition(position string)
 
 	// FlushDelta writes the accumulated changes to the database.
-	FlushDelta(ctx *sql.Context, reason delta.FlushReason) error
+	FlushDelta(ctx *sql.Context, tx *stdsql.Tx, reason delta.FlushReason) error
 }
