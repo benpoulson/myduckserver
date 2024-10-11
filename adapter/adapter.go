@@ -11,6 +11,9 @@ type ConnectionHolder interface {
 	GetConn(ctx context.Context) (*stdsql.Conn, error)
 	GetTxn(ctx context.Context, options *stdsql.TxOptions) (*stdsql.Tx, error)
 	GetCatalogConn(ctx context.Context) (*stdsql.Conn, error)
+	GetCatalogTxn(ctx context.Context, options *stdsql.TxOptions) (*stdsql.Tx, error)
+	TryGetTxn() *stdsql.Tx
+	CloseTxn()
 }
 
 func GetConn(ctx *sql.Context) (*stdsql.Conn, error) {
@@ -19,6 +22,18 @@ func GetConn(ctx *sql.Context) (*stdsql.Conn, error) {
 
 func GetTxn(ctx *sql.Context, options *stdsql.TxOptions) (*stdsql.Tx, error) {
 	return ctx.Session.(ConnectionHolder).GetTxn(ctx, options)
+}
+
+func GetCatalogTxn(ctx *sql.Context, options *stdsql.TxOptions) (*stdsql.Tx, error) {
+	return ctx.Session.(ConnectionHolder).GetCatalogTxn(ctx, options)
+}
+
+func TryGetTxn(ctx *sql.Context) *stdsql.Tx {
+	return ctx.Session.(ConnectionHolder).TryGetTxn()
+}
+
+func CloseTxn(ctx *sql.Context) {
+	ctx.Session.(ConnectionHolder).CloseTxn()
 }
 
 func Query(ctx *sql.Context, query string, args ...any) (*stdsql.Rows, error) {
@@ -73,6 +88,14 @@ func ExecCatalog(ctx *sql.Context, query string, args ...any) (stdsql.Result, er
 		return nil, err
 	}
 	return conn.ExecContext(ctx, query, args...)
+}
+
+func ExecCatalogInTxn(ctx *sql.Context, query string, args ...any) (stdsql.Result, error) {
+	tx, err := ctx.Session.(ConnectionHolder).GetCatalogTxn(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	return tx.ExecContext(ctx, query, args...)
 }
 
 func ExecInTxn(ctx *sql.Context, query string, args ...any) (stdsql.Result, error) {

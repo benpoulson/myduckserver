@@ -90,7 +90,7 @@ func (sess Session) StartTransaction(ctx *sql.Context, tCharacteristic sql.Trans
 
 	var tx *stdsql.Tx
 	if startUnderlyingTx {
-		sess.GetLogger().Infoln("StartDuckTransaction")
+		sess.GetLogger().Trace("StartDuckTransaction")
 		tx, err = sess.GetTxn(ctx, &stdsql.TxOptions{ReadOnly: tCharacteristic == sql.ReadOnly})
 		if err != nil {
 			return nil, err
@@ -101,10 +101,10 @@ func (sess Session) StartTransaction(ctx *sql.Context, tCharacteristic sql.Trans
 
 // CommitTransaction implements sql.TransactionSession.
 func (sess Session) CommitTransaction(ctx *sql.Context, tx sql.Transaction) error {
-	sess.GetLogger().Infoln("CommitTransaction")
+	sess.GetLogger().Trace("CommitTransaction")
 	transaction := tx.(*Transaction)
 	if transaction.tx != nil {
-		sess.GetLogger().Infoln("CommitDuckTransaction")
+		sess.GetLogger().Trace("CommitDuckTransaction")
 		defer sess.CloseTxn()
 		if err := transaction.tx.Commit(); err != nil {
 			return err
@@ -115,10 +115,10 @@ func (sess Session) CommitTransaction(ctx *sql.Context, tx sql.Transaction) erro
 
 // Rollback implements sql.TransactionSession.
 func (sess Session) Rollback(ctx *sql.Context, tx sql.Transaction) error {
-	sess.GetLogger().Infoln("Rollback")
+	sess.GetLogger().Trace("Rollback")
 	transaction := tx.(*Transaction)
 	if transaction.tx != nil {
-		sess.GetLogger().Infoln("RollbackDuckTransaction")
+		sess.GetLogger().Trace("RollbackDuckTransaction")
 		defer sess.CloseTxn()
 		if err := transaction.tx.Rollback(); err != nil {
 			return err
@@ -193,10 +193,22 @@ func (sess Session) GetCatalogConn(ctx context.Context) (*stdsql.Conn, error) {
 	return sess.pool.GetConn(ctx, sess.ID())
 }
 
+// GetTxn implements adapter.ConnectionHolder.
 func (sess Session) GetTxn(ctx context.Context, options *stdsql.TxOptions) (*stdsql.Tx, error) {
 	return sess.pool.GetTxn(ctx, sess.ID(), sess.GetCurrentDatabase(), options)
 }
 
+// GetCatalogTxn implements adapter.ConnectionHolder.
+func (sess Session) GetCatalogTxn(ctx context.Context, options *stdsql.TxOptions) (*stdsql.Tx, error) {
+	return sess.pool.GetTxn(ctx, sess.ID(), "", options)
+}
+
+// TryGetTxn implements adapter.ConnectionHolder.
+func (sess Session) TryGetTxn() *stdsql.Tx {
+	return sess.pool.TryGetTxn(sess.ID())
+}
+
+// CloseTxn implements adapter.ConnectionHolder.
 func (sess Session) CloseTxn() {
 	sess.pool.CloseTxn(sess.ID())
 }

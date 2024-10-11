@@ -32,7 +32,6 @@ import (
 )
 
 const binlogPositionDirectory = ".replica"
-const binlogPositionFilename = "binlog-position"
 const mysqlFlavor = "MySQL56"
 const defaultChannelName = ""
 
@@ -61,10 +60,7 @@ func (store *binlogPositionStore) Load(ctx *sql.Context, engine *gms.Engine) (po
 	}
 
 	// Strip off the "MySQL56/" prefix
-	prefix := "MySQL56/"
-	if strings.HasPrefix(positionString, prefix) {
-		positionString = positionString[len(prefix):]
-	}
+	positionString = strings.TrimPrefix(positionString, "MySQL56/")
 
 	return replication.ParsePosition(mysqlFlavor, positionString)
 }
@@ -81,7 +77,11 @@ func (store *binlogPositionStore) Save(ctx *sql.Context, engine *gms.Engine, pos
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
-	if _, err := adapter.ExecInTxn(ctx, catalog.InternalTables.BinlogPosition.UpsertStmt(), defaultChannelName, position.String()); err != nil {
+	if _, err := adapter.ExecCatalogInTxn(
+		ctx,
+		catalog.InternalTables.BinlogPosition.UpsertStmt(),
+		defaultChannelName, position.String(),
+	); err != nil {
 		return fmt.Errorf("unable to save binlog position: %w", err)
 	}
 	return nil
@@ -94,7 +94,7 @@ func (store *binlogPositionStore) Delete(ctx *sql.Context, engine *gms.Engine) e
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
-	_, err := adapter.ExecInTxn(ctx, catalog.InternalTables.BinlogPosition.DeleteStmt(), defaultChannelName)
+	_, err := adapter.ExecCatalogInTxn(ctx, catalog.InternalTables.BinlogPosition.DeleteStmt(), defaultChannelName)
 	return err
 }
 
