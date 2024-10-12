@@ -364,10 +364,11 @@ func (a *binlogReplicaApplier) replicaBinlogEventHandler(ctx *sql.Context) error
 			ctx.GetLogger().Trace("received stop replication signal")
 			eventProducer.Stop()
 			if a.ongoingBatchTxn.Load() && !a.dirtyStream.Load() {
-				if err := a.commitOngoingTxn(ctx, engine, NormalCommit); err != nil {
+				if err := a.commitOngoingTxn(ctx, engine, NormalCommit, delta.OnCloseFlushReason); err != nil {
 					recordReplicationError(ctx, err)
 				}
 			}
+			return nil
 		}
 	}
 }
@@ -623,10 +624,10 @@ const (
 	ImplicitCommitAfterStmt
 )
 
-func (a *binlogReplicaApplier) commitOngoingTxn(ctx *sql.Context, engine *gms.Engine, kind CommitKind) error {
+func (a *binlogReplicaApplier) commitOngoingTxn(ctx *sql.Context, engine *gms.Engine, kind CommitKind, reason delta.FlushReason) error {
 	// Flush the delta buffer if it's grown too large
 	// TODO(fan): Make the threshold configurable
-	if err := a.flushDeltaBuffer(ctx, delta.MemoryLimitFlushReason); err != nil {
+	if err := a.flushDeltaBuffer(ctx, reason); err != nil {
 		return err
 	}
 
@@ -681,28 +682,37 @@ func (a *binlogReplicaApplier) commitOngoingTxn(ctx *sql.Context, engine *gms.En
 	return nil
 }
 
-func (a *binlogReplicaApplier) mayExtendBatchTxn() bool {
-	return a.ongoingBatchTxn.Load() &&
-		time.Since(a.lastCommitTime) < 200*time.Millisecond &&
-		a.deltaBufSize.Load() < (128<<20) // 128MB
+func (a *binlogReplicaApplier) mayExtendBatchTxn() (bool, delta.FlushReason) {
+	extend, reason := false, delta.UnknownFlushReason
+	if a.ongoingBatchTxn.Load() {
+		extend = true
+		switch {
+		case time.Since(a.lastCommitTime) >= 200*time.Millisecond: // commit the batched txn every 200ms
+			extend, reason = false, delta.TimeTickFlushReason
+		case a.deltaBufSize.Load() >= (128 << 20): // commit the batched txn if the delta buffer is too large (>= 128MB)
+			extend, reason = false, delta.MemoryLimitFlushReason
+		}
+	}
+	return extend, reason
 }
 
 func (a *binlogReplicaApplier) extendOrCommitBatchTxn(ctx *sql.Context, engine *gms.Engine) error {
 	// If we're in a batched transaction, then we don't want to commit yet.
-	if a.mayExtendBatchTxn() {
+	extend, reason := a.mayExtendBatchTxn()
+	if extend {
 		a.pendingPosition = replication.AppendGTID(a.pendingPosition, a.currentGtid)
 		a.dirtyStream.Store(false)
 		return nil
 	}
 
-	return a.commitOngoingTxn(ctx, engine, NormalCommit)
+	return a.commitOngoingTxn(ctx, engine, NormalCommit, reason)
 }
 
 // executeQueryWithEngine executes a query against the engine and returns an error if the query failed.
 func (a *binlogReplicaApplier) executeQueryWithEngine(ctx *sql.Context, engine *gms.Engine, query mysql.Query) error {
 	// TODO(fan): Here we skip the operations on `mysql.time_zone*` tables, which are not supported by go-mysql-server yet.
 	if query.Database == "mysql" && strings.HasPrefix(query.SQL, "TRUNCATE TABLE time_zone") {
-		return a.commitOngoingTxn(ctx, engine, ImplicitCommitAfterStmt)
+		return a.commitOngoingTxn(ctx, engine, ImplicitCommitAfterStmt, delta.DMLStmtFlushReason)
 	}
 
 	// Create a sub-context when running queries against the engine, so that we get an accurate query start time.
@@ -732,14 +742,16 @@ func (a *binlogReplicaApplier) executeQueryWithEngine(ctx *sql.Context, engine *
 	}).Tracef("Executing %T query", node)
 	switch node.(type) {
 	case *plan.StartTransaction:
-		if a.mayExtendBatchTxn() {
+		var extendable bool
+		extendable, flushReason = a.mayExtendBatchTxn()
+		if extendable {
 			// If we're in an extended batched transaction,
 			// then we don't want to start a new transaction yet.
 			a.pendingPosition = replication.AppendGTID(a.pendingPosition, a.previousGtid)
 			a.dirtyStream.Store(true)
 			return nil
 		}
-		implicitCommit, flushChangelog, flushReason = true, true, delta.UnknownFlushReason
+		implicitCommit, flushChangelog = true, true
 
 	case *plan.Commit:
 		return a.extendOrCommitBatchTxn(subctx, engine)
@@ -757,7 +769,7 @@ func (a *binlogReplicaApplier) executeQueryWithEngine(ctx *sql.Context, engine *
 	}
 
 	if flushChangelog {
-		// Flush the buffered changes in a separate transaction
+		// Flush the buffered changes
 		if err := a.flushDeltaBuffer(subctx, flushReason); err != nil {
 			return err
 		}
@@ -765,7 +777,7 @@ func (a *binlogReplicaApplier) executeQueryWithEngine(ctx *sql.Context, engine *
 
 	if implicitCommit && a.dirtyTxn.Load() {
 		// Commit the previous transaction before executing the query.
-		if err := a.commitOngoingTxn(subctx, engine, ImplicitCommitBeforeStmt); err != nil {
+		if err := a.commitOngoingTxn(subctx, engine, ImplicitCommitBeforeStmt, flushReason); err != nil {
 			return err
 		}
 	}
@@ -786,7 +798,7 @@ func (a *binlogReplicaApplier) executeQueryWithEngine(ctx *sql.Context, engine *
 
 	if mysqlutil.CauseImplicitCommitAfter(node) {
 		// Commit the transaction after executing the query
-		return a.commitOngoingTxn(subctx, engine, ImplicitCommitAfterStmt)
+		return a.commitOngoingTxn(subctx, engine, ImplicitCommitAfterStmt, flushReason)
 	}
 
 	return nil
