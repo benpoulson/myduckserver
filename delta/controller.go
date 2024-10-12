@@ -2,7 +2,6 @@ package delta
 
 import (
 	"bytes"
-	"context"
 	stdsql "database/sql"
 	"fmt"
 	"math/bits"
@@ -122,19 +121,21 @@ func (c *DeltaController) Flush(ctx *sql.Context, tx *stdsql.Tx, reason FlushRea
 	}
 
 	if stats.DeltaSize > 0 {
-		ctx.GetLogger().WithFields(logrus.Fields{
-			"DeltaSize":  stats.DeltaSize,
-			"Insertions": stats.Insertions,
-			"Deletions":  stats.Deletions,
-			"Reason":     reason.String(),
-		}).Trace("Flushed delta buffer")
+		if log := ctx.GetLogger(); log.Logger.IsLevelEnabled(logrus.TraceLevel) {
+			ctx.GetLogger().WithFields(logrus.Fields{
+				"DeltaSize":  stats.DeltaSize,
+				"Insertions": stats.Insertions,
+				"Deletions":  stats.Deletions,
+				"Reason":     reason.String(),
+			}).Trace("Flushed delta buffer")
+		}
 	}
 
 	return stats, nil
 }
 
 func (c *DeltaController) updateTable(
-	ctx context.Context,
+	ctx *sql.Context,
 	tx *stdsql.Tx,
 	table tableIdentifier,
 	appender *DeltaAppender,
@@ -234,10 +235,12 @@ func (c *DeltaController) updateTable(
 	stats.DeltaSize += affected
 	defer tx.ExecContext(ctx, "DROP TABLE IF EXISTS temp.main.delta")
 
-	logrus.WithFields(logrus.Fields{
-		"table": qualifiedTableName,
-		"rows":  affected,
-	}).Trace("Delta created")
+	if log := ctx.GetLogger(); log.Logger.IsLevelEnabled(logrus.TraceLevel) {
+		log.WithFields(logrus.Fields{
+			"table": qualifiedTableName,
+			"rows":  affected,
+		}).Trace("Delta created")
+	}
 
 	// Insert or replace new rows (action = INSERT) into the base table.
 	insertSQL := "INSERT OR REPLACE INTO " +
@@ -253,10 +256,12 @@ func (c *DeltaController) updateTable(
 	}
 	stats.Insertions += affected
 
-	logrus.WithFields(logrus.Fields{
-		"table": qualifiedTableName,
-		"rows":  affected,
-	}).Trace("Inserted")
+	if log := ctx.GetLogger(); log.Logger.IsLevelEnabled(logrus.TraceLevel) {
+		log.WithFields(logrus.Fields{
+			"table": qualifiedTableName,
+			"rows":  affected,
+		}).Trace("Inserted")
+	}
 
 	// Delete rows that have been deleted.
 	// The plan for `IN` is optimized to a SEMI JOIN,
@@ -279,10 +284,12 @@ func (c *DeltaController) updateTable(
 	}
 	stats.Deletions += affected
 
-	logrus.WithFields(logrus.Fields{
-		"table": qualifiedTableName,
-		"rows":  affected,
-	}).Trace("Deleted")
+	if log := ctx.GetLogger(); log.Logger.IsLevelEnabled(logrus.TraceLevel) {
+		log.WithFields(logrus.Fields{
+			"table": qualifiedTableName,
+			"rows":  affected,
+		}).Trace("Deleted")
+	}
 
 	return nil
 }

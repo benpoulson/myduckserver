@@ -399,17 +399,30 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 		}
 	}
 
+	// ------------------- NOTE -----------------------
+	// Since this function is called in a hot loop,
+	// we invoke the logging API conditionally
+	// to avoid unnecessary memory allocation
+	// made by logrus and interface boxing.
+	// ------------------------------------------------
+	logger := ctx.GetLogger()
+	isTraceLevelEnabled := logger.Logger.IsLevelEnabled(logrus.TraceLevel)
+
 	switch {
 	case event.IsRand():
 		// A RAND_EVENT contains two seed values that set the rand_seed1 and rand_seed2 system variables that are
 		// used to compute the random number. For more details, see: https://mariadb.com/kb/en/rand_event/
 		// Note: it is written only before a QUERY_EVENT and is NOT used with row-based logging.
-		ctx.GetLogger().Trace("Received binlog event: Rand")
+		if isTraceLevelEnabled {
+			logger.Trace("Received binlog event: Rand")
+		}
 
 	case event.IsXID():
 		// An XID event is generated for a COMMIT of a transaction that modifies one or more tables of an
 		// XA-capable storage engine. For more details, see: https://mariadb.com/kb/en/xid_event/
-		ctx.GetLogger().Trace("Received binlog event: XID")
+		if isTraceLevelEnabled {
+			logger.Trace("Received binlog event: XID")
+		}
 		return a.extendOrCommitBatchTxn(ctx, engine)
 
 	case event.IsQuery():
@@ -424,45 +437,60 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 
 		flags, mode := parseQueryEventVars(*a.format, event)
 
-		ctx.GetLogger().WithFields(logrus.Fields{
-			"database": query.Database,
-			"charset":  query.Charset,
-			"query":    query.SQL,
-			"flags":    fmt.Sprintf("0x%x", flags),
-			"sql_mode": fmt.Sprintf("0x%x", mode),
-		}).Trace("Received binlog event: Query")
+		if isTraceLevelEnabled {
+			logger.WithFields(logrus.Fields{
+				"database": query.Database,
+				"charset":  query.Charset,
+				"query":    query.SQL,
+				"flags":    fmt.Sprintf("0x%x", flags),
+				"sql_mode": fmt.Sprintf("0x%x", mode),
+			}).Trace("Received binlog event: Query")
+		}
 
+		var msg string
 		if flags&doltvtmysql.QFlagOptionAutoIsNull > 0 {
-			ctx.GetLogger().Trace("Setting sql_auto_is_null ON")
+			msg = "Setting sql_auto_is_null ON"
 			ctx.SetSessionVariable(ctx, "sql_auto_is_null", 1)
 		} else {
-			ctx.GetLogger().Trace("Setting sql_auto_is_null OFF")
+			msg = "Setting sql_auto_is_null OFF"
 			ctx.SetSessionVariable(ctx, "sql_auto_is_null", 0)
+		}
+		if isTraceLevelEnabled {
+			logger.Trace(msg)
 		}
 
 		if flags&doltvtmysql.QFlagOptionNotAutocommit > 0 {
-			ctx.GetLogger().Trace("Setting autocommit=0")
+			msg = "Setting autocommit=0"
 			ctx.SetSessionVariable(ctx, "autocommit", 0)
 		} else {
-			ctx.GetLogger().Trace("Setting autocommit=1")
+			msg = "Setting autocommit=1"
 			ctx.SetSessionVariable(ctx, "autocommit", 1)
+		}
+		if isTraceLevelEnabled {
+			logger.Trace(msg)
 		}
 
 		if flags&doltvtmysql.QFlagOptionNoForeignKeyChecks > 0 {
-			ctx.GetLogger().Trace("Setting foreign_key_checks=0")
+			msg = "Setting foreign_key_checks=0"
 			ctx.SetSessionVariable(ctx, "foreign_key_checks", 0)
 		} else {
-			ctx.GetLogger().Trace("Setting foreign_key_checks=1")
+			msg = "Setting foreign_key_checks=1"
 			ctx.SetSessionVariable(ctx, "foreign_key_checks", 1)
+		}
+		if isTraceLevelEnabled {
+			logger.Trace(msg)
 		}
 
 		// NOTE: unique_checks is not currently honored by Dolt
 		if flags&doltvtmysql.QFlagOptionRelaxedUniqueChecks > 0 {
-			ctx.GetLogger().Trace("Setting unique_checks=0")
+			msg = "Setting unique_checks=0"
 			ctx.SetSessionVariable(ctx, "unique_checks", 0)
 		} else {
-			ctx.GetLogger().Trace("Setting unique_checks=1")
+			msg = "Setting unique_checks=1"
 			ctx.SetSessionVariable(ctx, "unique_checks", 1)
+		}
+		if isTraceLevelEnabled {
+			logger.Trace(msg)
 		}
 
 		if err := a.executeQueryWithEngine(ctx, engine, query); err != nil {
@@ -480,7 +508,9 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 		// pointing to the next file in the sequence. ROTATE_EVENT is generated locally and written to the binary log
 		// on the source server and it's also written when a FLUSH LOGS statement occurs on the source server.
 		// For more details, see: https://mariadb.com/kb/en/rotate_event/
-		ctx.GetLogger().Trace("Received binlog event: Rotate")
+		if isTraceLevelEnabled {
+			logger.Trace("Received binlog event: Rotate")
+		}
 		// https://dev.mysql.com/doc/refman/8.4/en/binary-log.html
 		// > ... a transaction is written to the file in one piece, never split between files.
 		if a.currentGtid != nil {
@@ -495,12 +525,15 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 			return err
 		}
 		a.format = &format
-		ctx.GetLogger().WithFields(logrus.Fields{
-			"format":        a.format,
-			"formatVersion": a.format.FormatVersion,
-			"serverVersion": a.format.ServerVersion,
-			"checksum":      a.format.ChecksumAlgorithm,
-		}).Trace("Received binlog event: FormatDescription")
+
+		if isTraceLevelEnabled {
+			logger.WithFields(logrus.Fields{
+				"format":        a.format,
+				"formatVersion": a.format.FormatVersion,
+				"serverVersion": a.format.ServerVersion,
+				"checksum":      a.format.ChecksumAlgorithm,
+			}).Trace("Received binlog event: FormatDescription")
+		}
 
 	case event.IsPreviousGTIDs():
 		// Logged in every binlog to record the current replication state. Consists of the last GTID seen for each
@@ -509,9 +542,12 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 		if err != nil {
 			return err
 		}
-		ctx.GetLogger().WithFields(logrus.Fields{
-			"previousGtids": position.GTIDSet.String(),
-		}).Trace("Received binlog event: PreviousGTIDs")
+
+		if isTraceLevelEnabled {
+			logger.WithFields(logrus.Fields{
+				"previousGtids": position.GTIDSet.String(),
+			}).Trace("Received binlog event: PreviousGTIDs")
+		}
 
 	case event.IsGTID():
 		// For global transaction ID, used to start a new transaction event group, instead of the old BEGIN query event,
@@ -520,10 +556,13 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 		if err != nil {
 			return err
 		}
-		ctx.GetLogger().WithFields(logrus.Fields{
-			"gtid":    gtid,
-			"isBegin": isBegin,
-		}).Trace("Received binlog event: GTID")
+
+		if isTraceLevelEnabled {
+			logger.WithFields(logrus.Fields{
+				"gtid":    gtid,
+				"isBegin": isBegin,
+			}).Trace("Received binlog event: GTID")
+		}
 
 		// BEGIN will commit the previous transaction implicitly, so we need to set the previous GTID to the current GTID.
 		a.previousGtid = a.currentGtid
@@ -555,14 +594,17 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 		if err != nil {
 			return err
 		}
-		ctx.GetLogger().WithFields(logrus.Fields{
-			"id":        tableId,
-			"tableName": tableMap.Name,
-			"database":  tableMap.Database,
-			"flags":     convertToHexString(tableMap.Flags),
-			"metadata":  tableMap.Metadata,
-			"types":     tableMap.Types,
-		}).Trace("Received binlog event: TableMap")
+
+		if isTraceLevelEnabled {
+			logger.WithFields(logrus.Fields{
+				"id":        tableId,
+				"tableName": tableMap.Name,
+				"database":  tableMap.Database,
+				"flags":     convertToHexString(tableMap.Flags),
+				"metadata":  tableMap.Metadata,
+				"types":     tableMap.Types,
+			}).Trace("Received binlog event: TableMap")
+		}
 
 		if tableId == 0xFFFFFF {
 			// Table ID 0xFFFFFF is a special value that indicates table maps can be freed.
@@ -733,13 +775,17 @@ func (a *binlogReplicaApplier) executeQueryWithEngine(ctx *sql.Context, engine *
 	if err != nil {
 		return err
 	}
-	ctx.GetLogger().WithFields(logrus.Fields{
-		"query":           query.SQL,
-		"db":              subctx.GetCurrentDatabase(),
-		"ongoingBatchTxn": a.ongoingBatchTxn.Load(),
-		"dirtyTxn":        a.dirtyTxn.Load(),
-		"dirtyStream":     a.dirtyStream.Load(),
-	}).Tracef("Executing %T query", node)
+
+	if log := ctx.GetLogger(); log.Logger.IsLevelEnabled(logrus.TraceLevel) {
+		log.WithFields(logrus.Fields{
+			"query":           query.SQL,
+			"db":              subctx.GetCurrentDatabase(),
+			"ongoingBatchTxn": a.ongoingBatchTxn.Load(),
+			"dirtyTxn":        a.dirtyTxn.Load(),
+			"dirtyStream":     a.dirtyStream.Load(),
+		}).Tracef("Executing %T query", node)
+	}
+
 	switch node.(type) {
 	case *plan.StartTransaction:
 		var extendable bool
@@ -838,7 +884,9 @@ func (a *binlogReplicaApplier) processRowEvent(ctx *sql.Context, event mysql.Bin
 	default:
 		return fmt.Errorf("unsupported event type: %v", event)
 	}
-	ctx.GetLogger().Tracef("Received binlog event: %s", eventName)
+	if log := ctx.GetLogger(); log.Logger.IsLevelEnabled(logrus.TraceLevel) {
+		log.Tracef("Received binlog event: %s", eventName)
+	}
 
 	tableId := event.TableID(*a.format)
 	tableMap, ok := a.tableMapsById[tableId]
@@ -860,9 +908,11 @@ func (a *binlogReplicaApplier) processRowEvent(ctx *sql.Context, event mysql.Bin
 		return err
 	}
 
-	ctx.GetLogger().WithFields(logrus.Fields{
-		"flags": fmt.Sprintf("%x", rows.Flags),
-	}).Tracef("Processing rows from %s event", eventName)
+	if log := ctx.GetLogger(); log.Logger.IsLevelEnabled(logrus.TraceLevel) {
+		log.WithFields(logrus.Fields{
+			"flags": fmt.Sprintf("%x", rows.Flags),
+		}).Tracef("Processing rows from %s event", eventName)
+	}
 
 	flags := rows.Flags
 	foreignKeyChecksDisabled := false
@@ -903,7 +953,10 @@ func (a *binlogReplicaApplier) processRowEvent(ctx *sql.Context, event mysql.Bin
 		eventType = binlog.InsertRowEvent
 		isRowFormat = rows.DataColumns.BitCount() == fieldCount
 	}
-	ctx.GetLogger().Tracef(" - %s Rows (db: %s, table: %s, row format: %v, row count: %v)", eventType, tableMap.Database, tableName, isRowFormat, len(rows.Rows))
+
+	if log := ctx.GetLogger(); log.Logger.IsLevelEnabled(logrus.TraceLevel) {
+		log.Tracef(" - %s Rows (db: %s, table: %s, IsRowFormat: %v, RowCount: %v)", eventType, tableMap.Database, tableName, isRowFormat, len(rows.Rows))
+	}
 
 	if isRowFormat && len(pkSchema.PkOrdinals) > 0 {
 		// --binlog-format=ROW & --binlog-row-image=full
@@ -977,12 +1030,14 @@ func (a *binlogReplicaApplier) writeChanges(
 		return err
 	}
 
-	ctx.GetLogger().WithFields(logrus.Fields{
-		"db":    tableMap.Database,
-		"table": tableName,
-		"event": event,
-		"rows":  len(rows.Rows),
-	}).Trace("processRowEvent")
+	if log := ctx.GetLogger(); log.Logger.IsLevelEnabled(logrus.TraceLevel) {
+		log.WithFields(logrus.Fields{
+			"db":    tableMap.Database,
+			"table": tableName,
+			"event": event,
+			"rows":  len(rows.Rows),
+		}).Trace("processRowEvent")
+	}
 
 	return nil
 }

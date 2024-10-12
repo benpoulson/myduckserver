@@ -111,3 +111,7 @@ func (a *DeltaAppender) Build() arrow.Record {
 func (a *DeltaAppender) Grow(n int) {
 	a.appender.Grow(n)
 }
+
+func (a *DeltaAppender) Release() {
+	a.appender.Release()
+}

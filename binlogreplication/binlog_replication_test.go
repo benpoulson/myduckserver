@@ -89,7 +89,7 @@ func teardown(t *testing.T) {
 		}
 
 		fmt.Printf("\nDolt server log from %s:\n", duckLogFilePath)
-		// printFile(duckLogFilePath)
+		printFile(duckLogFilePath)
 	} else {
 		// clean up temp files on clean test runs
 		defer os.RemoveAll(testDir)
