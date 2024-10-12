@@ -89,7 +89,7 @@ func teardown(t *testing.T) {
 		}
 
 		fmt.Printf("\nDolt server log from %s:\n", duckLogFilePath)
-		printFile(duckLogFilePath)
+		// printFile(duckLogFilePath)
 	} else {
 		// clean up temp files on clean test runs
 		defer os.RemoveAll(testDir)
@@ -854,9 +854,9 @@ func startDuckSqlServer(dir string, persistentSystemVars map[string]string) (int
 	}
 
 	args := []string{"go", "run", ".",
-		// "--loglevel=TRACE",
 		fmt.Sprintf("--port=%v", duckPort),
 		fmt.Sprintf("--datadir=%s", dir),
+		"--loglevel=6", // TRACE
 	}
 
 	// If we're running in CI, use a precompiled dolt binary instead of go run

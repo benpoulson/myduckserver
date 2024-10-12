@@ -258,6 +258,17 @@ func (a *binlogReplicaApplier) startReplicationEventStream(ctx *sql.Context, con
 	// to interpret any event messages before we receive the new format description from the new stream.
 	a.format = nil
 
+	// Clear out the transactional states and the delta buffer
+	a.previousGtid = nil
+	a.currentGtid = nil
+	a.ongoingBatchTxn.Store(false)
+	a.dirtyTxn.Store(false)
+	a.dirtyStream.Store(false)
+	a.inTxnStmtID.Store(0)
+	a.lastCommitTime = time.Now()
+	a.tableWriterProvider.DiscardDeltaBuffer(ctx)
+	a.deltaBufSize.Store(0)
+
 	// If the source server has binlog checksums enabled (@@global.binlog_checksum), then the replica MUST
 	// set @master_binlog_checksum to handshake with the server to acknowledge that it knows that checksums
 	// are in use. Without this step, the server will just send back error messages saying that the replica
@@ -337,8 +348,7 @@ func (a *binlogReplicaApplier) replicaBinlogEventHandler(ctx *sql.Context) error
 				}
 			} else {
 				// otherwise, log the error if it's something we don't expect and continue
-				ctx.GetLogger().Errorf("unexpected error of type %T: '%v'", err, err.Error())
-				MyBinlogReplicaController.setIoError(sqlerror.ERUnknownError, err.Error())
+				recordReplicationError(ctx, err)
 			}
 
 		case <-ticker.C:
@@ -346,17 +356,25 @@ func (a *binlogReplicaApplier) replicaBinlogEventHandler(ctx *sql.Context) error
 				// We should commit the transaction to flush the changes to the database
 				// if we're in a batched transaction and haven't seen any changes for a while.
 				if err := a.extendOrCommitBatchTxn(ctx, engine); err != nil {
-					ctx.GetLogger().Errorf("unexpected error of type %T: '%v'", err, err.Error())
-					MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, err.Error())
+					recordReplicationError(ctx, err)
 				}
 			}
 
 		case <-a.stopReplicationChan:
 			ctx.GetLogger().Trace("received stop replication signal")
 			eventProducer.Stop()
-			return a.flushDeltaBuffer(ctx, delta.OnCloseFlushReason)
+			if a.ongoingBatchTxn.Load() && !a.dirtyStream.Load() {
+				if err := a.commitOngoingTxn(ctx, engine, NormalCommit); err != nil {
+					recordReplicationError(ctx, err)
+				}
+			}
 		}
 	}
+}
+
+func recordReplicationError(ctx *sql.Context, err error) {
+	ctx.GetLogger().Errorf("unexpected error of type %T: '%v'", err, err.Error())
+	MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, err.Error())
 }
 
 // processBinlogEvent processes a single binlog event message and returns an error if there were any problems
@@ -462,6 +480,11 @@ func (a *binlogReplicaApplier) processBinlogEvent(ctx *sql.Context, engine *gms.
 		// on the source server and it's also written when a FLUSH LOGS statement occurs on the source server.
 		// For more details, see: https://mariadb.com/kb/en/rotate_event/
 		ctx.GetLogger().Trace("Received binlog event: Rotate")
+		// https://dev.mysql.com/doc/refman/8.4/en/binary-log.html
+		// > ... a transaction is written to the file in one piece, never split between files.
+		if a.currentGtid != nil {
+			return a.extendOrCommitBatchTxn(ctx, engine)
+		}
 
 	case event.IsFormatDescription():
 		// This is a descriptor event that is written to the beginning of a binary log file, at position 4 (after
@@ -1068,7 +1091,7 @@ func (a *binlogReplicaApplier) flushDeltaBuffer(ctx *sql.Context, reason delta.F
 
 	defer a.deltaBufSize.Store(0)
 
-	if err = a.tableWriterProvider.FlushDelta(ctx, tx, reason); err != nil {
+	if err = a.tableWriterProvider.FlushDeltaBuffer(ctx, tx, reason); err != nil {
 		ctx.GetLogger().Errorf("Failed to flush changelog: %v", err.Error())
 		MyBinlogReplicaController.setSqlError(sqlerror.ERUnknownError, err.Error())
 	}

@@ -27,8 +27,6 @@ import (
 	"github.com/dolthub/vitess/go/mysql"
 )
 
-const PersistentVariableTableName = "main.persistent_variables"
-
 type Session struct {
 	*memory.Session
 	db   *catalog.DatabaseProvider
@@ -70,7 +68,7 @@ var _ sql.Transaction = (*Transaction)(nil)
 
 // StartTransaction implements sql.TransactionSession.
 func (sess Session) StartTransaction(ctx *sql.Context, tCharacteristic sql.TransactionCharacteristic) (sql.Transaction, error) {
-	sess.GetLogger().Infoln("StartTransaction")
+	sess.GetLogger().Trace("StartTransaction")
 	base, err := sess.Session.StartTransaction(ctx, tCharacteristic)
 	if err != nil {
 		return nil, err

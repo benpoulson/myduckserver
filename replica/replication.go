@@ -83,11 +83,11 @@ func (twp *tableWriterProvider) GetDeltaAppender(
 	return twp.controller.GetDeltaAppender(databaseName, tableName, schema)
 }
 
-func (twp *tableWriterProvider) UpdateLogPosition(position string) {
-	twp.controller.UpdatePosition(position)
-}
-
-func (twp *tableWriterProvider) FlushDelta(ctx *sql.Context, tx *stdsql.Tx, reason delta.FlushReason) error {
+func (twp *tableWriterProvider) FlushDeltaBuffer(ctx *sql.Context, tx *stdsql.Tx, reason delta.FlushReason) error {
 	_, err := twp.controller.Flush(ctx, tx, reason)
 	return err
+}
+
+func (twp *tableWriterProvider) DiscardDeltaBuffer(ctx *sql.Context) {
+	twp.controller.Close()
 }

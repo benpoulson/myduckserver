@@ -21,16 +21,15 @@ import (
 )
 
 type FlushStats struct {
-	DeltaSize int64
-	Inserts   int64
-	Deletes   int64
+	DeltaSize  int64
+	Insertions int64
+	Deletions  int64
 }
 
 type DeltaController struct {
-	mutex    sync.Mutex
-	tables   map[tableIdentifier]*DeltaAppender
-	position string
-	pool     *backend.ConnectionPool
+	mutex  sync.Mutex
+	tables map[tableIdentifier]*DeltaAppender
+	pool   *backend.ConnectionPool
 }
 
 func NewController(pool *backend.ConnectionPool) *DeltaController {
@@ -60,21 +59,18 @@ func (c *DeltaController) GetDeltaAppender(
 	return appender, nil
 }
 
-func (c *DeltaController) UpdatePosition(position string) {
-	c.position = position
-}
-
 func (c *DeltaController) Close() {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	for _, da := range c.tables {
+	for k, da := range c.tables {
 		da.appender.Release()
+		delete(c.tables, k)
 	}
 }
 
 // Flush writes the accumulated changes to the database.
-func (c *DeltaController) Flush(ctx context.Context, tx *stdsql.Tx, reason FlushReason) (FlushStats, error) {
+func (c *DeltaController) Flush(ctx *sql.Context, tx *stdsql.Tx, reason FlushReason) (FlushStats, error) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
@@ -125,8 +121,16 @@ func (c *DeltaController) Flush(ctx context.Context, tx *stdsql.Tx, reason Flush
 		}
 	}
 
-	_, err := tx.ExecContext(ctx, catalog.InternalTables.BinlogPosition.UpsertStmt(), "", c.position)
-	return stats, err
+	if stats.DeltaSize > 0 {
+		ctx.GetLogger().WithFields(logrus.Fields{
+			"DeltaSize":  stats.DeltaSize,
+			"Insertions": stats.Insertions,
+			"Deletions":  stats.Deletions,
+			"Reason":     reason.String(),
+		}).Trace("Flushed delta buffer")
+	}
+
+	return stats, nil
 }
 
 func (c *DeltaController) updateTable(
@@ -232,8 +236,8 @@ func (c *DeltaController) updateTable(
 
 	logrus.WithFields(logrus.Fields{
 		"table": qualifiedTableName,
-		"rows":  stats.DeltaSize,
-	}).Infoln("Delta created")
+		"rows":  affected,
+	}).Trace("Delta created")
 
 	// Insert or replace new rows (action = INSERT) into the base table.
 	insertSQL := "INSERT OR REPLACE INTO " +
@@ -247,12 +251,12 @@ func (c *DeltaController) updateTable(
 	if err != nil {
 		return err
 	}
-	stats.Inserts += affected
+	stats.Insertions += affected
 
 	logrus.WithFields(logrus.Fields{
 		"table": qualifiedTableName,
-		"rows":  stats.Inserts,
-	}).Infoln("Inserted")
+		"rows":  affected,
+	}).Trace("Inserted")
 
 	// Delete rows that have been deleted.
 	// The plan for `IN` is optimized to a SEMI JOIN,
@@ -273,12 +277,12 @@ func (c *DeltaController) updateTable(
 	if err != nil {
 		return err
 	}
-	stats.Deletes += affected
+	stats.Deletions += affected
 
 	logrus.WithFields(logrus.Fields{
 		"table": qualifiedTableName,
-		"rows":  stats.Deletes,
-	}).Infoln("Deleted")
+		"rows":  affected,
+	}).Trace("Deleted")
 
 	return nil
 }

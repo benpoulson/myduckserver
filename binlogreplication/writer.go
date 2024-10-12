@@ -47,8 +47,9 @@ type TableWriterProvider interface {
 		schema sql.Schema,
 	) (DeltaAppender, error)
 
-	UpdateLogPosition(position string)
-
 	// FlushDelta writes the accumulated changes to the database.
-	FlushDelta(ctx *sql.Context, tx *stdsql.Tx, reason delta.FlushReason) error
+	FlushDeltaBuffer(ctx *sql.Context, tx *stdsql.Tx, reason delta.FlushReason) error
+
+	// DiscardDeltaBuffer discards the accumulated changes.
+	DiscardDeltaBuffer(ctx *sql.Context)
 }
