@@ -100,7 +100,7 @@ var InternalTables = struct {
 		ValueColumns: []string{"VARIABLE_VALUE"},
 		DDL:          "VARIABLE_NAME TEXT PRIMARY KEY, VARIABLE_VALUE TEXT",
 		InitialData: [][]any{
-			{"Innodb_redo_log_enabled", "OFF"},
+			{"Innodb_redo_log_enabled", "OFF"}, // Queried by MySQL Shell
 		},
 	},
 }
