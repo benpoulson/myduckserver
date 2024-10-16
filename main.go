@@ -22,6 +22,7 @@ import (
 	"github.com/apecloud/myduckserver/backend"
 	"github.com/apecloud/myduckserver/catalog"
 	"github.com/apecloud/myduckserver/myfunc"
+	"github.com/apecloud/myduckserver/plugin"
 	"github.com/apecloud/myduckserver/replica"
 	"github.com/apecloud/myduckserver/transpiler"
 	sqle "github.com/dolthub/go-mysql-server"
@@ -98,6 +99,7 @@ func main() {
 	builder := backend.NewDuckBuilder(engine.Analyzer.ExecBuilder, pool)
 	engine.Analyzer.ExecBuilder = builder
 	engine.Analyzer.Catalog.RegisterFunction(sql.NewContext(context.Background()), myfunc.ExtraBuiltIns...)
+	engine.Analyzer.Catalog.MySQLDb.SetPlugins(plugin.AuthPlugins)
 
 	if err := setPersister(provider, engine); err != nil {
 		logrus.Fatalln("Failed to set the persister:", err)
