@@ -17,6 +17,7 @@ package backend
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/dolthub/go-mysql-server/server"
@@ -27,6 +28,9 @@ type MyHandler struct {
 	*server.Handler
 	pool *ConnectionPool
 }
+
+// Precompile regex for performance
+var autoIncrementRegex = regexp.MustCompile(`AUTO_INCREMENT=\d+`)
 
 func (h *MyHandler) ConnectionClosed(c *mysql.Conn) {
 	h.pool.CloseConn(c.ConnectionID)
@@ -51,6 +55,9 @@ func (h *MyHandler) ComQuery(
 ) error {
 	// https://github.com/dolthub/dolt/issues/8455
 	query = strings.ReplaceAll(query, "CHARACTER SET 'utf8mb4'", "CHARACTER SET utf8mb4")
+
+	query = autoIncrementRegex.ReplaceAllString(query, "")
+
 	return h.Handler.ComQuery(ctx, c, query, callback)
 }
 
