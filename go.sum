@@ -79,6 +79,8 @@ github.com/dolthub/go-mysql-server v0.18.2-0.20240926171723-77ed13c03196 h1:H4bK
 github.com/dolthub/go-mysql-server v0.18.2-0.20240926171723-77ed13c03196/go.mod h1:lGbU2bK+QNnlETdUjOOaE+UnlEUu31VaQOFKAFGyZN4=
 github.com/dolthub/go-mysql-server v0.18.2-0.20241015190154-54bd6d6e1ce8 h1:opC/9GtHMpPf5v0eRdngp166LcJTTyQ+YZfyjAchHaY=
 github.com/dolthub/go-mysql-server v0.18.2-0.20241015190154-54bd6d6e1ce8/go.mod h1:Z8tket+3sYcU3d4yW90Ggld2d+C2DUgnpB8cBP0+GvI=
+github.com/dolthub/go-mysql-server v0.18.2-0.20241016193930-58d51b356103 h1:AG0T2y5xORr384R9eALgPpdDVfilmlBjo4tSl+IY6G8=
+github.com/dolthub/go-mysql-server v0.18.2-0.20241016193930-58d51b356103/go.mod h1:z/GGuH2asedC+lkJA4sx+C3oyRH1HRx8ET6N9AGBVms=
 github.com/dolthub/jsonpath v0.0.2-0.20240227200619-19675ab05c71 h1:bMGS25NWAGTEtT5tOBsCuCrlYnLRKpbJVJkDbrTRhwQ=
 github.com/dolthub/jsonpath v0.0.2-0.20240227200619-19675ab05c71/go.mod h1:2/2zjLQ/JOOSbbSboojeg+cAwcRV0fDLzIiWch/lhqI=
 github.com/dolthub/sqllogictest/go v0.0.0-20240618184124-ca47f9354216 h1:JWkKRE4EHUcEVQCMRBej8DYxjYjRz/9MdF/NNQh0o70=
@@ -87,6 +89,8 @@ github.com/dolthub/vitess v0.0.0-20240919225659-2ad81685e772 h1:vDwBX7Lc8DnA8Zk0
 github.com/dolthub/vitess v0.0.0-20240919225659-2ad81685e772/go.mod h1:uBvlRluuL+SbEWTCZ68o0xvsdYZER3CEG/35INdzfJM=
 github.com/dolthub/vitess v0.0.0-20241010201417-9d4f54b29ccc h1:ZZgTRuxEwd3X67njtK30buHeZScLAd4W0rbRV8CORhE=
 github.com/dolthub/vitess v0.0.0-20241010201417-9d4f54b29ccc/go.mod h1:uBvlRluuL+SbEWTCZ68o0xvsdYZER3CEG/35INdzfJM=
+github.com/dolthub/vitess v0.0.0-20241016191424-d14e107a654e h1:Ssd/iV0hAOShAgr0c4pJQNgh2E4my2XHblFIIam0D+4=
+github.com/dolthub/vitess v0.0.0-20241016191424-d14e107a654e/go.mod h1:uBvlRluuL+SbEWTCZ68o0xvsdYZER3CEG/35INdzfJM=
 github.com/dustin/go-humanize v0.0.0-20171111073723-bb3d318650d4/go.mod h1:HtrtbFcZ19U5GC7JDqmcUSB87Iq5E25KnS6fMYU6eOk=
 github.com/eapache/go-resiliency v1.1.0/go.mod h1:kFI+JgMyC7bLPUVY133qvEBtVayf5mFgVsvEsIPBvNs=
 github.com/eapache/go-xerial-snappy v0.0.0-20180814174437-776d5712da21/go.mod h1:+020luEh2TKB4/GOp8oxxtq0Daoen/Cii55CzbTV6DU=
