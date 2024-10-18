@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -16,9 +17,13 @@ import (
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
+const isUnixSystem = runtime.GOOS == "linux" ||
+	runtime.GOOS == "darwin" ||
+	runtime.GOOS == "freebsd"
+
 func isRewritableLoadData(node *plan.LoadData) bool {
-	fmt.Printf("%#v\n", node)
-	return len(node.FieldsTerminatedBy) == 1 &&
+	return !(node.Local && !isUnixSystem) && // pipe syscall is not available on Windows
+		len(node.FieldsTerminatedBy) == 1 &&
 		len(node.FieldsEnclosedBy) <= 1 &&
 		len(node.FieldsEscapedBy) <= 1 &&
 		len(node.LinesStartingBy) == 0 &&
@@ -49,14 +54,14 @@ func isSupportedFileCharacterSet(charset string) bool {
 // into a DuckDB INSERT INTO statement and executes it.
 func (db *DuckBuilder) buildLoadData(ctx *sql.Context, root sql.Node, insert *plan.InsertInto, dst sql.InsertableTable, load *plan.LoadData) (sql.RowIter, error) {
 	if load.Local {
-		return db.buildLoadDataLocal(ctx, insert, dst, load)
+		return db.buildClientSideLoadData(ctx, insert, dst, load)
 	}
-	return db.buildLoadDataNonLocal(ctx, insert, dst, load)
+	return db.buildServerSideLoadData(ctx, insert, dst, load)
 }
 
 // Since the data is sent to the server in the form of a byte stream,
 // we use a Unix pipe to stream the data to DuckDB.
-func (db *DuckBuilder) buildLoadDataLocal(ctx *sql.Context, insert *plan.InsertInto, dst sql.InsertableTable, load *plan.LoadData) (sql.RowIter, error) {
+func (db *DuckBuilder) buildClientSideLoadData(ctx *sql.Context, insert *plan.InsertInto, dst sql.InsertableTable, load *plan.LoadData) (sql.RowIter, error) {
 	_, localInfile, ok := sql.SystemVariables.GetGlobal("local_infile")
 	if !ok {
 		return nil, fmt.Errorf("error: local_infile variable was not found")
@@ -77,7 +82,8 @@ func (db *DuckBuilder) buildLoadDataLocal(ctx *sql.Context, insert *plan.InsertI
 	if err := os.MkdirAll(pipeDir, 0755); err != nil {
 		return nil, err
 	}
-	pipePath := filepath.Join(pipeDir, strconv.Itoa(int(ctx.ID())))
+	pipeName := strconv.Itoa(int(ctx.ID())) + ".pipe"
+	pipePath := filepath.Join(pipeDir, pipeName)
 	if err := syscall.Mkfifo(pipePath, 0600); err != nil {
 		return nil, err
 	}
@@ -97,7 +103,7 @@ func (db *DuckBuilder) buildLoadDataLocal(ctx *sql.Context, insert *plan.InsertI
 }
 
 // In the non-local case, we can directly use the file path to read the data.
-func (db *DuckBuilder) buildLoadDataNonLocal(ctx *sql.Context, insert *plan.InsertInto, dst sql.InsertableTable, load *plan.LoadData) (sql.RowIter, error) {
+func (db *DuckBuilder) buildServerSideLoadData(ctx *sql.Context, insert *plan.InsertInto, dst sql.InsertableTable, load *plan.LoadData) (sql.RowIter, error) {
 	_, secureFileDir, ok := sql.SystemVariables.GetGlobal("secure_file_priv")
 	if !ok {
 		return nil, fmt.Errorf("error: secure_file_priv variable was not found")
@@ -142,27 +148,45 @@ func (db *DuckBuilder) executeLoadData(ctx *sql.Context, insert *plan.InsertInto
 	b.WriteString("'")
 
 	b.WriteString(", sep = ")
-	b.WriteString(fmt.Sprintf("%q", load.FieldsTerminatedBy[0]))
+	b.WriteString(singleQuotedDuckChar(load.FieldsTerminatedBy))
 
-	if len(load.FieldsEnclosedBy) > 0 {
-		b.WriteString(", quote = ")
-		b.WriteString(fmt.Sprintf("%q", load.FieldsEnclosedBy))
-	}
-	if len(load.FieldsEscapedBy) > 0 {
+	b.WriteString(", quote = ")
+	b.WriteString(singleQuotedDuckChar(load.FieldsEnclosedBy))
+
+	// TODO(fan): DuckDB does not support the `\` escape mode of MySQL yet.
+	if load.FieldsEscapedBy == `\` {
+		b.WriteString(`, escape = ''`)
+	} else {
 		b.WriteString(", escape = ")
-		b.WriteString(fmt.Sprintf("%q", load.FieldsEscapedBy))
+		b.WriteString(singleQuotedDuckChar(load.FieldsEscapedBy))
 	}
-	b.WriteString(`, nullstr = ['\N', 'NULL']`)
+
+	// > If FIELDS ENCLOSED BY is not empty, a field containing
+	// > the literal word NULL as its value is read as a NULL value.
+	// > If FIELDS ESCAPED BY is empty, NULL is written as the word NULL.
+	b.WriteString(", allow_quoted_nulls = false, nullstr = ")
+	if len(load.FieldsEnclosedBy) > 0 || len(load.FieldsEscapedBy) == 0 {
+		b.WriteString(`'NULL'`)
+	} else {
+		b.WriteString(`'\N'`)
+	}
 
 	if load.IgnoreNum > 0 {
 		b.WriteString(", skip = ")
 		b.WriteString(strconv.FormatInt(load.IgnoreNum, 10))
 	}
 
+	b.WriteString(", columns = ")
+	if err := columnTypeHints(&b, dst, dst.Schema(), load.ColNames); err != nil {
+		return nil, err
+	}
+
 	b.WriteString(")")
 
 	// Execute the DuckDB INSERT INTO statement.
 	duckSQL := b.String()
+	ctx.GetLogger().Trace(duckSQL)
+
 	result, err := adapter.Exec(ctx, duckSQL)
 	if err != nil {
 		return nil, err
@@ -182,6 +206,62 @@ func (db *DuckBuilder) executeLoadData(ctx *sql.Context, insert *plan.InsertInto
 		RowsAffected: uint64(affected),
 		InsertID:     uint64(insertId),
 	})), nil
+}
+
+func singleQuotedDuckChar(s string) string {
+	if len(s) == 0 {
+		return `''`
+	}
+	r := []rune(s)[0]
+	if r == '\\' {
+		return `'\'` // Slash does not need to be escaped in DuckDB
+	}
+	return strconv.QuoteRune(r) // e.g., tab -> '\t'
+}
+
+func columnTypeHints(b *strings.Builder, dst sql.Table, schema sql.Schema, colNames []string) error {
+	b.WriteString("{")
+
+	if len(colNames) == 0 {
+		for i, col := range schema {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(catalog.QuoteIdentifierANSI(col.Name))
+			b.WriteString(": ")
+			if dt, err := catalog.DuckdbDataType(col.Type); err != nil {
+				return err
+			} else {
+				b.WriteString(`'`)
+				b.WriteString(dt.Name())
+				b.WriteString(`'`)
+			}
+		}
+		b.WriteString("}")
+		return nil
+	}
+
+	for i, col := range colNames {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(catalog.QuoteIdentifierANSI(col))
+		b.WriteString(": ")
+		idx := schema.IndexOf(col, dst.Name()) // O(n^2) but n := # of columns is usually small
+		if idx < 0 {
+			return sql.ErrTableColumnNotFound.New(dst.Name(), col)
+		}
+		if dt, err := catalog.DuckdbDataType(schema[idx].Type); err != nil {
+			return err
+		} else {
+			b.WriteString(`'`)
+			b.WriteString(dt.Name())
+			b.WriteString(`'`)
+		}
+	}
+
+	b.WriteString("}")
+	return nil
 }
 
 // isUnderSecureFileDir ensures that fileStr is under secureFileDir or a subdirectory of secureFileDir, errors otherwise
