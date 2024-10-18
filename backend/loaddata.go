@@ -27,8 +27,7 @@ func isRewritableLoadData(node *plan.LoadData) bool {
 		len(node.FieldsEnclosedBy) <= 1 &&
 		len(node.FieldsEscapedBy) <= 1 &&
 		len(node.LinesStartingBy) == 0 &&
-		len(node.LinesTerminatedBy) <= 2 &&
-		strings.Trim(node.LinesTerminatedBy, "\r\n") == "" &&
+		isSupportedLineTerminator(node.LinesTerminatedBy) &&
 		areAllExpressionsNil(node.SetExprs) &&
 		areAllExpressionsNil(node.UserVars) &&
 		isSupportedFileCharacterSet(node.Charset)
@@ -48,6 +47,10 @@ func isSupportedFileCharacterSet(charset string) bool {
 		strings.HasPrefix(strings.ToLower(charset), "utf8") ||
 		strings.EqualFold(charset, "ascii") ||
 		strings.EqualFold(charset, "binary")
+}
+
+func isSupportedLineTerminator(terminator string) bool {
+	return terminator == "\n" || terminator == "\r" || terminator == "\r\n"
 }
 
 // buildLoadData translates a MySQL LOAD DATA statement
@@ -118,7 +121,7 @@ func (db *DuckBuilder) buildServerSideLoadData(ctx *sql.Context, insert *plan.In
 func (db *DuckBuilder) executeLoadData(ctx *sql.Context, insert *plan.InsertInto, dst sql.InsertableTable, load *plan.LoadData, filePath string) (sql.RowIter, error) {
 	// Build the DuckDB INSERT INTO statement.
 	var b strings.Builder
-	b.Grow(128)
+	b.Grow(256)
 
 	keyless := sql.IsKeyless(dst.Schema())
 	b.WriteString("INSERT")
@@ -146,6 +149,16 @@ func (db *DuckBuilder) executeLoadData(ctx *sql.Context, insert *plan.InsertInto
 	b.WriteString("read_csv('")
 	b.WriteString(filePath)
 	b.WriteString("'")
+
+	b.WriteString(", auto_detect = false")
+	b.WriteString(", header = false")
+
+	b.WriteString(", new_line = ")
+	if len(load.LinesTerminatedBy) == 1 {
+		b.WriteString(singleQuotedDuckChar(load.LinesTerminatedBy))
+	} else {
+		b.WriteString(`'\r\n'`)
+	}
 
 	b.WriteString(", sep = ")
 	b.WriteString(singleQuotedDuckChar(load.FieldsTerminatedBy))
