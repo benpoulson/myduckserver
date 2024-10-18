@@ -918,10 +918,9 @@ func TestLoadData(t *testing.T) {
 	harness := NewDefaultDuckHarness()
 	harness.QueriesToSkip(
 		"create table loadtable(pk int primary key, check (pk > 1))",
+		"create table loadtable(pk int primary key, c1 int)", // Table has more columns than import.
 		"CREATE TABLE test1 (pk BIGINT PRIMARY KEY, v1 BIGINT DEFAULT (v2 * 10), v2 BIGINT DEFAULT 5);",
 		"CREATE TABLE test1 (pk BIGINT PRIMARY KEY, v1 BIGINT DEFAULT (v2 * 10), v2 BIGINT DEFAULT 5);",
-		"LOAD DATA INFILE './testdata/test2.csv' IGNORE INTO TABLE loadtable FIELDS TERMINATED BY ',' IGNORE 1 LINES",
-		"LOAD DATA INFILE './testdata/test2.csv' REPLACE INTO TABLE loadtable FIELDS TERMINATED BY ',' IGNORE 1 LINES",
 	)
 	enginetest.TestLoadData(t, harness)
 }
