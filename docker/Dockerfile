@@ -1,6 +1,6 @@
-# Step 1: Build stage
 # Use the official Go image for building the Go application
-FROM golang:1.23 AS builder
+# Step 1: Build stage
+FROM golang:1.22.7 AS builder
 
 # Set environment variables for cross-compilation
 ARG TARGETOS=linux
@@ -22,17 +22,22 @@ COPY . .
 RUN go build -o /myduckserver
 
 # Step 2: Final stage
-FROM debian:bookworm-slim
+FROM mysql:9.1
 
 ARG TARGETOS=linux
 ARG TARGETARCH
 
 # Install curl, libstdc++6, and other necessary tools
-RUN apt-get update && apt-get install -y \
+RUN microdnf update && microdnf install -y \
     curl \
     unzip \
-    libstdc++6 \
-    && rm -rf /var/lib/apt/lists/*
+    libstdc++ \
+    python3 \
+    python3-pip && \
+    microdnf clean all
+
+# Install Python dependencies
+RUN pip install --no-cache-dir "sqlglot[rs]"
 
 # Dynamic DuckDB CLI download based on architecture
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
@@ -48,15 +53,6 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
     && duckdb -c 'SELECT extension_name, loaded, install_path FROM duckdb_extensions() where installed'
 
 RUN duckdb -version
-
-RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
-    --no-install-recommends && \
-    rm -rf /var/lib/apt/lists/*
-
-# Install Python dependencies
-RUN pip install --no-cache-dir "sqlglot[rs]"  --break-system-packages
 
 # Set the working directory inside the container
 WORKDIR /app
