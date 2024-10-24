@@ -39,6 +39,7 @@ RUN apt-get update && apt-get install -y \
 # Install Python dependencies
 RUN pip install --no-cache-dir "sqlglot[rs]" --break-system-packages
 
+# Install mysql-shell
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
         ARCH="arm"; \
     else \
@@ -46,7 +47,7 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
     fi && \
     curl -LJO https://dev.mysql.com/get/Downloads/MySQL-Shell/mysql-shell-9.1.0-linux-glibc2.28-${ARCH}-64bit.tar.gz \
     && tar -zxvf mysql-shell-9.1.0-linux-glibc2.28-${ARCH}-64bit.tar.gz \
-    && mv mysql-shell-9.1.0-linux-glibc2.28-arm-64bit /usr/local/mysqlsh \
+    && mv mysql-shell-9.1.0-linux-glibc2.28-${ARCH}-64bit /usr/local/mysqlsh \
     && ln -s /usr/local/mysqlsh/bin/mysqlsh /usr/local/bin/mysqlsh \
     && mysqlsh --version
 
