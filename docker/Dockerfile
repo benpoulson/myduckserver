@@ -22,22 +22,33 @@ COPY . .
 RUN go build -o /myduckserver
 
 # Step 2: Final stage
-FROM mysql:9.1
+FROM debian:bookworm-slim
 
 ARG TARGETOS=linux
 ARG TARGETARCH
 
-# Install curl, libstdc++6, and other necessary tools
-RUN microdnf update && microdnf install -y \
+RUN apt-get update && apt-get install -y \
     curl \
     unzip \
-    libstdc++ \
+    libstdc++6 \
     python3 \
-    python3-pip && \
-    microdnf clean all
+    python3-pip \
+    --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
-RUN pip install --no-cache-dir "sqlglot[rs]"
+RUN pip install --no-cache-dir "sqlglot[rs]" --break-system-packages
+
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+        ARCH="arm"; \
+    else \
+        ARCH="amd"; \
+    fi && \
+    curl -LJO https://dev.mysql.com/get/Downloads/MySQL-Shell/mysql-shell-9.1.0-linux-glibc2.28-${ARCH}-64bit.tar.gz \
+    && tar -zxvf mysql-shell-9.1.0-linux-glibc2.28-${ARCH}-64bit.tar.gz \
+    && mv mysql-shell-9.1.0-linux-glibc2.28-arm-64bit /usr/local/mysqlsh \
+    && ln -s /usr/local/mysqlsh/bin/mysqlsh /usr/local/bin/mysqlsh \
+    && mysqlsh --version
 
 # Dynamic DuckDB CLI download based on architecture
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
@@ -59,6 +70,8 @@ WORKDIR /app
 
 # Copy the compiled Go binary from the builder stage
 COPY --from=builder /myduckserver /usr/local/bin/myduckserver
+COPY --chown=admin:admin --chmod=755 docker/*.sh .
+COPY --chown=admin:admin --chmod=755 devtools/replica-setup ./replica-setup
 
 ENV LC_CTYPE="en_US.UTF-8"
 ENV LANG="en_US.UTF-8"
@@ -67,4 +80,4 @@ ENV LANG="en_US.UTF-8"
 EXPOSE 3306
 
 # Set the default command to run the Go server
-CMD ["myduckserver"]
+ENTRYPOINT /app/entrypoint.sh
