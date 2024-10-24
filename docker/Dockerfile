@@ -43,7 +43,7 @@ RUN pip install --no-cache-dir "sqlglot[rs]" --break-system-packages
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
         ARCH="arm"; \
     else \
-        ARCH="amd"; \
+        ARCH="x86"; \
     fi && \
     curl -LJO https://dev.mysql.com/get/Downloads/MySQL-Shell/mysql-shell-9.1.0-linux-glibc2.28-${ARCH}-64bit.tar.gz \
     && tar -zxvf mysql-shell-9.1.0-linux-glibc2.28-${ARCH}-64bit.tar.gz \
@@ -66,8 +66,13 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
 
 RUN duckdb -version
 
+RUN useradd --create-home --user-group --shell /bin/bash admin \
+    && echo 'admin:admin' | chpasswd \
+    && echo 'admin ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
+
 # Set the working directory inside the container
-WORKDIR /app
+USER admin
+WORKDIR /home/admin
 
 # Copy the compiled Go binary from the builder stage
 COPY --from=builder /myduckserver /usr/local/bin/myduckserver
@@ -81,4 +86,4 @@ ENV LANG="en_US.UTF-8"
 EXPOSE 3306
 
 # Set the default command to run the Go server
-ENTRYPOINT /app/entrypoint.sh
+ENTRYPOINT /usr/bin/sudo && /home/admin/entrypoint.sh
