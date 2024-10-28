@@ -25,6 +25,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/apecloud/myduckserver/adapter"
+	"github.com/apecloud/myduckserver/backend"
 	sqle "github.com/dolthub/go-mysql-server"
 	"github.com/dolthub/go-mysql-server/server"
 	"github.com/dolthub/go-mysql-server/sql"
@@ -279,7 +281,23 @@ type QueryExecutor func(ctx *sql.Context, query string, parsed sqlparser.Stateme
 // executeQuery is a QueryExecutor that calls QueryWithBindings on the given engine using the given query and parsed
 // statement, which may be nil.
 func (h *DoltgresHandler) executeQuery(ctx *sql.Context, query string, parsed sqlparser.Statement, _ sql.Node) (sql.Schema, sql.RowIter, *sql.QueryFlags, error) {
-	return h.e.QueryWithBindings(ctx, query, parsed, nil, nil)
+	// return h.e.QueryWithBindings(ctx, query, parsed, nil, nil)
+	// TODO(fan): For DML statements, we should call Exec
+	rows, err := adapter.Query(ctx, query)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	schema, err := inferSchema(rows)
+	if err != nil {
+		rows.Close()
+		return nil, nil, nil, err
+	}
+	iter, err := backend.NewSQLRowIter(rows, schema)
+	if err != nil {
+		rows.Close()
+		return nil, nil, nil, err
+	}
+	return schema, iter, nil, nil
 }
 
 // executeBoundPlan is a QueryExecutor that calls QueryWithBindings on the given engine using the given query and parsed

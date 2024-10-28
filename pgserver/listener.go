@@ -57,6 +57,7 @@ func NewListenerWithOpts(listenerCfg mysql.ListenerConfig, server *server.Server
 	l := &Listener{
 		listener: listenerCfg.Listener,
 		cfg:      listenerCfg,
+		server:   server,
 	}
 
 	for _, opt := range opts {

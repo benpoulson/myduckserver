@@ -29,7 +29,6 @@ import (
 	sqle "github.com/dolthub/go-mysql-server"
 	"github.com/dolthub/go-mysql-server/server"
 	"github.com/dolthub/go-mysql-server/sql"
-	"github.com/dolthub/vitess/go/mysql"
 	"github.com/sirupsen/logrus"
 
 	_ "github.com/marcboeker/go-duckdb"
@@ -46,7 +45,7 @@ var (
 	address       = "0.0.0.0"
 	port          = 3306
 	socket        string
-	pgPort        = 5432
+	postgresPort  = 5432
 	dataDirectory = "."
 	dbFileName    = "mysql.db"
 	logLevel      = int(logrus.InfoLevel)
@@ -58,9 +57,10 @@ func init() {
 	flag.StringVar(&address, "address", address, "The address to bind to.")
 	flag.IntVar(&port, "port", port, "The port to bind to.")
 	flag.StringVar(&socket, "socket", socket, "The Unix domain socket to bind to.")
-	flag.IntVar(&pgPort, "pg-port", pgPort, "The port to bind to for PostgreSQL protocol.")
 	flag.StringVar(&dataDirectory, "datadir", dataDirectory, "The directory to store the database.")
 	flag.IntVar(&logLevel, "loglevel", logLevel, "The log level to use.")
+
+	flag.IntVar(&postgresPort, "pg-port", postgresPort, "The port to bind to for PostgreSQL wire protocol.")
 
 	// The following options need to be set for MySQL Shell's utilities to work properly.
 
@@ -119,31 +119,20 @@ func main() {
 		Address:  fmt.Sprintf("%s:%d", address, port),
 		Socket:   socket,
 	}
-	s, err := server.NewServerWithHandler(config, engine, backend.NewSessionBuilder(provider, pool), nil, backend.WrapHandler(pool))
+	srv, err := server.NewServerWithHandler(config, engine, backend.NewSessionBuilder(provider, pool), nil, backend.WrapHandler(pool))
 	if err != nil {
 		panic(err)
 	}
 
-	if pgPort > 0 {
-		listener, err := server.NewListener("tcp", fmt.Sprintf("%s:%d", address, pgPort), "")
+	if postgresPort > 0 {
+		pgServer, err := pgserver.NewServer(srv, address, postgresPort)
 		if err != nil {
 			panic(err)
 		}
-		pgListener, err := pgserver.NewListener(
-			mysql.ListenerConfig{
-				Protocol: "tcp",
-				Address:  fmt.Sprintf("%s:%d", address, pgPort),
-				Listener: listener,
-			},
-			s,
-		)
-		if err != nil {
-			panic(err)
-		}
-		go pgListener.Accept()
+		go pgServer.Start()
 	}
 
-	if err = s.Start(); err != nil {
+	if err = srv.Start(); err != nil {
 		panic(err)
 	}
 }

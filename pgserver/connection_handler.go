@@ -23,7 +23,6 @@ import (
 	"net"
 	"os"
 	"strings"
-	"sync/atomic"
 
 	"github.com/apecloud/myduckserver/backend"
 	"github.com/dolthub/go-mysql-server/server"
@@ -68,7 +67,7 @@ func NewConnectionHandler(conn net.Conn, handler mysql.Handler, server *server.S
 		Conn:        conn,
 		PrepareData: make(map[uint32]*mysql.PrepareData),
 	}
-	mysqlConn.ConnectionID = atomic.AddUint32(&connectionIDCounter, 1)
+	mysqlConn.ConnectionID = server.Listener.(*mysql.Listener).ConnectionID.Add(1)
 
 	// Postgres has a two-stage procedure for prepared queries. First the query is parsed via a |Parse| message, and
 	// the result is stored in the |preparedStatements| map by the name provided. Then one or more |Bind| messages

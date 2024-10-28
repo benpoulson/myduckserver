@@ -26,7 +26,7 @@ require (
 
 replace (
 	github.com/dolthub/go-mysql-server v0.18.2-0.20241018220726-63ed221b1772 => github.com/fanyang01/go-mysql-server v0.0.0-20241021025444-83e2e88c99aa
-	github.com/dolthub/vitess v0.0.0-20241016191424-d14e107a654e => github.com/apecloud/dolt-vitess v0.0.0-20241017031156-06988c627a21
+	github.com/dolthub/vitess v0.0.0-20241016191424-d14e107a654e => github.com/apecloud/dolt-vitess v0.0.0-20241028060845-4a2a0444a0ac
 )
 
 require (

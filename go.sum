@@ -26,6 +26,8 @@ github.com/apache/thrift v0.12.0/go.mod h1:cp2SuWMxlEZw2r+iP2GNCdIi4C1qmUzdZFSVb
 github.com/apache/thrift v0.13.0/go.mod h1:cp2SuWMxlEZw2r+iP2GNCdIi4C1qmUzdZFSVb+bacwQ=
 github.com/apecloud/dolt-vitess v0.0.0-20241017031156-06988c627a21 h1:z8IXSqvlSuJMKNitC62IY8k7BwZ7gfVG+Ju56jygZXQ=
 github.com/apecloud/dolt-vitess v0.0.0-20241017031156-06988c627a21/go.mod h1:uBvlRluuL+SbEWTCZ68o0xvsdYZER3CEG/35INdzfJM=
+github.com/apecloud/dolt-vitess v0.0.0-20241028060845-4a2a0444a0ac h1:ndS6T0mIJNFAea1QCzfTj9tSGRD3xLiKK1p0QuHCgIU=
+github.com/apecloud/dolt-vitess v0.0.0-20241028060845-4a2a0444a0ac/go.mod h1:uBvlRluuL+SbEWTCZ68o0xvsdYZER3CEG/35INdzfJM=
 github.com/armon/circbuf v0.0.0-20150827004946-bbbad097214e/go.mod h1:3U/XgcO3hCbHZ8TKRvWD2dDTCfh9M9ya+I9JpbB7O8o=
 github.com/armon/go-metrics v0.0.0-20180917152333-f0300d1749da/go.mod h1:Q73ZrmVTwzkszR9V5SSuryQ31EELlFMUz1kKyl939pY=
 github.com/armon/go-radix v0.0.0-20180808171621-7fddfc383310/go.mod h1:ufUuZ+zHj4x4TnLV4JWEpy2hxWSpsRywHrMgIH9cCH8=
