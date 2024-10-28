@@ -1,6 +1,9 @@
 #!/bin/bash
 
-export PID_FILE="myduckserver.pid"
+export DATA_PATH="${HOME}/data"
+export LOG_PATH="${HOME}/log"
+export REPLICA_SETUP_PATH="${HOME}/replica-setup"
+export PID_FILE="${LOG_PATH}/myDuckServer.pid"
 
 # Function to run replica setup
 run_replica_setup() {
@@ -9,10 +12,10 @@ run_replica_setup() {
         exit 1
     fi
     echo "Creating replica with MySQL server at $mysql_host:$mysql_port..."
-    cd /home/admin/replica-setup/ || { echo "Error: Could not change directory to replica_setup"; exit 1; }
+    cd "$REPLICA_SETUP_PATH" || { echo "Error: Could not change directory to ${REPLICA_SETUP_PATH}"; exit 1; }
 
-    # Run create_replica.sh and check for errors
-    if bash create_replica.sh --mysql_host "$mysql_host" --mysql_port "$mysql_port" --mysql_user "$mysql_user" --mysql_password "$mysql_password"; then
+    # Run replica_setup.sh and check for errors
+    if bash replica_setup.sh --mysql_host "$mysql_host" --mysql_port "$mysql_port" --mysql_user "$mysql_user" --mysql_password "$mysql_password"; then
         echo "Replica setup completed."
     else
         echo "Error: Replica setup failed."
@@ -21,7 +24,8 @@ run_replica_setup() {
 }
 
 run_server() {
-      nohup myduckserver >> server.log 2>&1 &
+      cd "$DATA_PATH" || { echo "Error: Could not change directory to ${DATA_PATH}"; exit 1; }
+      nohup myduckserver >> "${LOG_PATH}"/server.log 2>&1 &
       echo "$!" > "${PID_FILE}"
 }
 
@@ -72,35 +76,36 @@ check_process_alive() {
 
 # Handle the setup_mode
 setup() {
+    mkdir -p "${DATA_PATH}"
+    mkdir -p "${LOG_PATH}"
     case "$setup_mode" in
         "" | "server_only")
             echo "Starting MyDuckServer in server_only mode..."
             run_server
             ;;
 
-        "create_replica_only")
-            echo "Running in create_replica_only mode..."
+        "replica_only")
+            echo "Running in replica_only mode..."
             run_replica_setup
             ;;
 
-        "mix")
-            echo "Starting MyDuckServer and running replica setup in mix mode..."
+        "combined")
+            echo "Starting MyDuckServer and running replica setup in combined mode..."
             run_server
             wait_for_my_duck_server_ready
             run_replica_setup
             ;;
 
         *)
-            echo "Error: Invalid setup_mode value. Valid options are: server_only, create_replica_only, mix."
+            echo "Error: Invalid setup_mode value. Valid options are: server_only, replica_only, combined."
             exit 1
             ;;
     esac
 }
 
 setup
-while [[ "$setup_mode" != "create_replica_only" ]]; do
+while [[ "$setup_mode" != "replica_only" ]]; do
     # Check if the processes have started
-    cd /home/admin/ || { echo "Error: Could not change directory to replica_setup"; exit 1; }
     check_process_alive "$PID_FILE" "MyDuckServer"
     MY_DUCK_SERVER_STATUS=$?
     if (( MY_DUCK_SERVER_STATUS != 0 )); then
