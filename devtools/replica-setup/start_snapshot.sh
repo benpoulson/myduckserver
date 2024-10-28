@@ -2,7 +2,7 @@
 
 # 1st step: Run MySQL commands to create 'admin' user and set local_infile
 echo "Creating admin user and setting local_infile..."
-mysql -h127.0.0.1 -uroot -P3306 <<EOF
+mysqlsh --sql --host=127.0.0.1 --user=root --port=3306 --password='' <<EOF
 CREATE USER 'admin'@'%' IDENTIFIED BY 'admin';
 GRANT ALL PRIVILEGES ON *.* TO 'admin'@'%';
 SET GLOBAL local_infile = 1;

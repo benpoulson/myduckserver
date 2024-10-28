@@ -28,6 +28,8 @@ ARG TARGETOS=linux
 ARG TARGETARCH
 
 RUN apt-get update && apt-get install -y \
+    vim \
+    procps \
     curl \
     unzip \
     libstdc++6 \
@@ -86,4 +88,4 @@ ENV LANG="en_US.UTF-8"
 EXPOSE 3306
 
 # Set the default command to run the Go server
-ENTRYPOINT /usr/bin/sudo && /home/admin/entrypoint.sh
+ENTRYPOINT /home/admin/entrypoint.sh

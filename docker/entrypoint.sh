@@ -9,8 +9,15 @@ run_replica_setup() {
         exit 1
     fi
     echo "Creating replica with MySQL server at $mysql_host:$mysql_port..."
-    cd replica_setup/ || { echo "Error: Could not change directory to replica_setup"; exit 1; }
-    exec bash create_replica.sh --mysql_host "$mysql_host" --mysql_port "$mysql_port" --mysql_user "$mysql_user" --mysql_password "$mysql_password"
+    cd /home/admin/replica-setup/ || { echo "Error: Could not change directory to replica_setup"; exit 1; }
+
+    # Run create_replica.sh and check for errors
+    if bash create_replica.sh --mysql_host "$mysql_host" --mysql_port "$mysql_port" --mysql_user "$mysql_user" --mysql_password "$mysql_password"; then
+        echo "Replica setup completed."
+    else
+        echo "Error: Replica setup failed."
+        exit 1
+    fi
 }
 
 run_server() {
@@ -28,7 +35,7 @@ wait_for_my_duck_server_ready() {
 
     echo "Waiting for MyDuckServer at $host:$port to be ready..."
 
-    until mysql -h"$host" -u"$user" -P"$port" -e "SELECT 1;" &> /dev/null; do
+    until mysqlsh --sql --host "$host" --user "$user" --password="" --port "$port" --execute "SELECT 1;" &> /dev/null; do
         attempt=$((attempt+1))
         if [ "$attempt" -ge "$max_attempts" ]; then
             echo "Error: MySQL connection timed out after $max_attempts attempts."
@@ -93,6 +100,7 @@ setup() {
 setup
 while [[ "$setup_mode" != "create_replica_only" ]]; do
     # Check if the processes have started
+    cd /home/admin/ || { echo "Error: Could not change directory to replica_setup"; exit 1; }
     check_process_alive "$PID_FILE" "MyDuckServer"
     MY_DUCK_SERVER_STATUS=$?
     if (( MY_DUCK_SERVER_STATUS != 0 )); then
