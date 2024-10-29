@@ -8,6 +8,7 @@ import (
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/dolthub/vitess/go/vt/proto/query"
+	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -66,9 +67,9 @@ func inferSchema(rows *stdsql.Rows) (sql.Schema, error) {
 		nullable, _ := t.Nullable()
 		schema[i] = &sql.Column{
 			Name: t.Name(),
-			Type: postgresType{
+			Type: PostgresType{
 				ColumnType: t,
-				PgType:     pgType,
+				PG:         pgType,
 			},
 			Nullable: nullable,
 		}
@@ -77,53 +78,57 @@ func inferSchema(rows *stdsql.Rows) (sql.Schema, error) {
 	return schema, nil
 }
 
-type postgresType struct {
-	ColumnType *stdsql.ColumnType
-	PgType     *pgtype.Type
+type PostgresType struct {
+	*stdsql.ColumnType
+	PG *pgtype.Type
 }
 
-var _ sql.Type = postgresType{}
+func (p PostgresType) Encode(v any, buf []byte) ([]byte, error) {
+	return defaultTypeMap.Encode(p.PG.OID, pgproto3.TextFormat, v, buf)
+}
 
-func (p postgresType) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
+var _ sql.Type = PostgresType{}
+
+func (p PostgresType) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
 	panic("not implemented")
 }
 
-func (p postgresType) Compare(v1 interface{}, v2 interface{}) (int, error) {
+func (p PostgresType) Compare(v1 interface{}, v2 interface{}) (int, error) {
 	panic("not implemented")
 }
 
-func (p postgresType) Convert(v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (p PostgresType) Convert(v interface{}) (interface{}, sql.ConvertInRange, error) {
 	panic("not implemented")
 }
 
-func (p postgresType) Equals(t sql.Type) bool {
+func (p PostgresType) Equals(t sql.Type) bool {
 	panic("not implemented")
 }
 
-func (p postgresType) MaxTextResponseByteLength(_ *sql.Context) uint32 {
+func (p PostgresType) MaxTextResponseByteLength(_ *sql.Context) uint32 {
 	panic("not implemented")
 }
 
-func (p postgresType) Promote() sql.Type {
+func (p PostgresType) Promote() sql.Type {
 	panic("not implemented")
 }
 
-func (p postgresType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (p PostgresType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
 	panic("not implemented")
 }
 
-func (p postgresType) Type() query.Type {
+func (p PostgresType) Type() query.Type {
 	panic("not implemented")
 }
 
-func (p postgresType) ValueType() reflect.Type {
+func (p PostgresType) ValueType() reflect.Type {
 	panic("not implemented")
 }
 
-func (p postgresType) Zero() interface{} {
+func (p PostgresType) Zero() interface{} {
 	panic("not implemented")
 }
 
-func (p postgresType) String() string {
+func (p PostgresType) String() string {
 	panic("not implemented")
 }

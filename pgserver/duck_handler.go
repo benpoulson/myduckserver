@@ -42,7 +42,7 @@ import (
 
 var printErrorStackTraces = false
 
-const PrintErrorStackTracesEnvKey = "DOLTGRES_PRINT_ERROR_STACK_TRACES"
+const PrintErrorStackTracesEnvKey = "MYDUCK_PRINT_ERROR_STACK_TRACES"
 
 func init() {
 	if _, ok := os.LookupEnv(PrintErrorStackTracesEnvKey); ok {
@@ -66,19 +66,19 @@ type Row struct {
 
 const rowsBatch = 128
 
-// DoltgresHandler is a handler uses SQLe engine directly
-// running Doltgres specific queries.
-type DoltgresHandler struct {
+// DuckHandler is a handler uses DuckDB and the SQLe engine directly
+// running Postgres specific queries.
+type DuckHandler struct {
 	e                 *sqle.Engine
 	sm                *server.SessionManager
 	readTimeout       time.Duration
 	encodeLoggedQuery bool
 }
 
-var _ Handler = &DoltgresHandler{}
+var _ Handler = &DuckHandler{}
 
 // ComBind implements the Handler interface.
-func (h *DoltgresHandler) ComBind(ctx context.Context, c *mysql.Conn, query string, parsedQuery mysql.ParsedQuery, bindVars map[string]sqlparser.Expr) (mysql.BoundQuery, []pgproto3.FieldDescription, error) {
+func (h *DuckHandler) ComBind(ctx context.Context, c *mysql.Conn, query string, parsedQuery mysql.ParsedQuery, bindVars map[string]sqlparser.Expr) (mysql.BoundQuery, []pgproto3.FieldDescription, error) {
 	sqlCtx, err := h.sm.NewContextWithQuery(ctx, c, query)
 	if err != nil {
 		return nil, nil, err
@@ -98,7 +98,7 @@ func (h *DoltgresHandler) ComBind(ctx context.Context, c *mysql.Conn, query stri
 }
 
 // ComExecuteBound implements the Handler interface.
-func (h *DoltgresHandler) ComExecuteBound(ctx context.Context, conn *mysql.Conn, query string, boundQuery mysql.BoundQuery, callback func(*Result) error) error {
+func (h *DuckHandler) ComExecuteBound(ctx context.Context, conn *mysql.Conn, query string, boundQuery mysql.BoundQuery, callback func(*Result) error) error {
 	analyzedPlan, ok := boundQuery.(sql.Node)
 	if !ok {
 		return fmt.Errorf("boundQuery must be a sql.Node, but got %T", boundQuery)
@@ -113,7 +113,7 @@ func (h *DoltgresHandler) ComExecuteBound(ctx context.Context, conn *mysql.Conn,
 }
 
 // ComPrepareParsed implements the Handler interface.
-func (h *DoltgresHandler) ComPrepareParsed(ctx context.Context, c *mysql.Conn, query string, parsed sqlparser.Statement) (mysql.ParsedQuery, []pgproto3.FieldDescription, error) {
+func (h *DuckHandler) ComPrepareParsed(ctx context.Context, c *mysql.Conn, query string, parsed sqlparser.Statement) (mysql.ParsedQuery, []pgproto3.FieldDescription, error) {
 	sqlCtx, err := h.sm.NewContextWithQuery(ctx, c, query)
 	if err != nil {
 		return nil, nil, err
@@ -146,7 +146,7 @@ func (h *DoltgresHandler) ComPrepareParsed(ctx context.Context, c *mysql.Conn, q
 }
 
 // ComQuery implements the Handler interface.
-func (h *DoltgresHandler) ComQuery(ctx context.Context, c *mysql.Conn, query string, parsed sqlparser.Statement, callback func(*Result) error) error {
+func (h *DuckHandler) ComQuery(ctx context.Context, c *mysql.Conn, query string, parsed sqlparser.Statement, callback func(*Result) error) error {
 	err := h.doQuery(ctx, c, query, parsed, nil, h.executeQuery, callback)
 	if err != nil {
 		err = sql.CastSQLError(err)
@@ -155,7 +155,7 @@ func (h *DoltgresHandler) ComQuery(ctx context.Context, c *mysql.Conn, query str
 }
 
 // ComResetConnection implements the Handler interface.
-func (h *DoltgresHandler) ComResetConnection(c *mysql.Conn) error {
+func (h *DuckHandler) ComResetConnection(c *mysql.Conn) error {
 	logrus.WithField("connectionId", c.ConnectionID).Debug("COM_RESET_CONNECTION command received")
 
 	// Grab the currently selected database name
@@ -174,7 +174,7 @@ func (h *DoltgresHandler) ComResetConnection(c *mysql.Conn) error {
 }
 
 // ConnectionClosed implements the Handler interface.
-func (h *DoltgresHandler) ConnectionClosed(c *mysql.Conn) {
+func (h *DuckHandler) ConnectionClosed(c *mysql.Conn) {
 	defer h.sm.RemoveConn(c)
 	defer h.e.CloseSession(c.ConnectionID)
 
@@ -184,7 +184,7 @@ func (h *DoltgresHandler) ConnectionClosed(c *mysql.Conn) {
 }
 
 // NewConnection implements the Handler interface.
-func (h *DoltgresHandler) NewConnection(c *mysql.Conn) {
+func (h *DuckHandler) NewConnection(c *mysql.Conn) {
 	h.sm.AddConn(c)
 	sql.StatusVariables.IncrementGlobal("Connections", 1)
 
@@ -193,13 +193,17 @@ func (h *DoltgresHandler) NewConnection(c *mysql.Conn) {
 }
 
 // NewContext implements the Handler interface.
-func (h *DoltgresHandler) NewContext(ctx context.Context, c *mysql.Conn, query string) (*sql.Context, error) {
+func (h *DuckHandler) NewContext(ctx context.Context, c *mysql.Conn, query string) (*sql.Context, error) {
 	return h.sm.NewContext(ctx, c, query)
 }
 
 var queryLoggingRegex = regexp.MustCompile(`[\r\n\t ]+`)
 
-func (h *DoltgresHandler) doQuery(ctx context.Context, c *mysql.Conn, query string, parsed sqlparser.Statement, analyzedPlan sql.Node, queryExec QueryExecutor, callback func(*Result) error) error {
+func (h *DuckHandler) doQuery(ctx context.Context, c *mysql.Conn, query string, parsed sqlparser.Statement, analyzedPlan sql.Node, queryExec QueryExecutor, callback func(*Result) error) error {
+	logrus.WithFields(logrus.Fields{
+		"query": query,
+	}).Info("doQuery")
+
 	sqlCtx, err := h.sm.NewContextWithQuery(ctx, c, query)
 	if err != nil {
 		return err
@@ -280,8 +284,37 @@ type QueryExecutor func(ctx *sql.Context, query string, parsed sqlparser.Stateme
 
 // executeQuery is a QueryExecutor that calls QueryWithBindings on the given engine using the given query and parsed
 // statement, which may be nil.
-func (h *DoltgresHandler) executeQuery(ctx *sql.Context, query string, parsed sqlparser.Statement, _ sql.Node) (sql.Schema, sql.RowIter, *sql.QueryFlags, error) {
+func (h *DuckHandler) executeQuery(ctx *sql.Context, query string, parsed sqlparser.Statement, _ sql.Node) (sql.Schema, sql.RowIter, *sql.QueryFlags, error) {
 	// return h.e.QueryWithBindings(ctx, query, parsed, nil, nil)
+
+	sql.IncrementStatusVariable(ctx, "Questions", 1)
+
+	// Give the integrator a chance to reject the session before proceeding
+	// TODO: this check doesn't belong here
+	err := ctx.Session.ValidateSession(ctx)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	err = h.beginTransaction(ctx)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	// analyzed, err := e.analyzeNode(ctx, query, bound, qFlags)
+	// if err != nil {
+	// 	return nil, nil, nil, err
+	// }
+
+	// if plan.NodeRepresentsSelect(analyzed) {
+	// 	sql.IncrementStatusVariable(ctx, "Com_select", 1)
+	// }
+
+	// err = e.readOnlyCheck(analyzed)
+	// if err != nil {
+	// 	return nil, nil, nil, err
+	// }
+
 	// TODO(fan): For DML statements, we should call Exec
 	rows, err := adapter.Query(ctx, query)
 	if err != nil {
@@ -302,13 +335,31 @@ func (h *DoltgresHandler) executeQuery(ctx *sql.Context, query string, parsed sq
 
 // executeBoundPlan is a QueryExecutor that calls QueryWithBindings on the given engine using the given query and parsed
 // statement, which may be nil.
-func (h *DoltgresHandler) executeBoundPlan(ctx *sql.Context, query string, _ sqlparser.Statement, plan sql.Node) (sql.Schema, sql.RowIter, *sql.QueryFlags, error) {
+func (h *DuckHandler) executeBoundPlan(ctx *sql.Context, query string, _ sqlparser.Statement, plan sql.Node) (sql.Schema, sql.RowIter, *sql.QueryFlags, error) {
 	return h.e.PrepQueryPlanForExecution(ctx, query, plan)
+}
+
+func (h *DuckHandler) beginTransaction(ctx *sql.Context) error {
+	beginNewTransaction := ctx.GetTransaction() == nil || plan.ReadCommitted(ctx)
+	if beginNewTransaction {
+		ctx.GetLogger().Tracef("beginning new transaction")
+		ts, ok := ctx.Session.(sql.TransactionSession)
+		if ok {
+			tx, err := ts.StartTransaction(ctx, sql.ReadWrite)
+			if err != nil {
+				return err
+			}
+
+			ctx.SetTransaction(tx)
+		}
+	}
+
+	return nil
 }
 
 // maybeReleaseAllLocks makes a best effort attempt to release all locks on the given connection. If the attempt fails,
 // an error is logged but not returned.
-func (h *DoltgresHandler) maybeReleaseAllLocks(c *mysql.Conn) {
+func (h *DuckHandler) maybeReleaseAllLocks(c *mysql.Conn) {
 	if ctx, err := h.sm.NewContextWithQuery(context.Background(), c, ""); err != nil {
 		logrus.Errorf("unable to release all locks on session close: %s", err)
 		logrus.Errorf("unable to unlock tables on session close: %s", err)
@@ -338,15 +389,27 @@ func schemaToFieldDescriptions(ctx *sql.Context, s sql.Schema) []pgproto3.FieldD
 	fields := make([]pgproto3.FieldDescription, len(s))
 	for i, c := range s {
 		var oid uint32
+		var size int16
+		var format int16
 		var err error
-		// if doltgresType, ok := c.Type.(pgtypes.DoltgresType); ok {
-		// 	oid = doltgresType.OID()
-		if false {
+		if pgType, ok := c.Type.(PostgresType); ok {
+			oid = pgType.PG.OID
+			// format = pgType.PG.Codec.PreferredFormat()
+			format = 0
+			if l, ok := pgType.Length(); ok {
+				size = int16(l)
+			} else if format == pgproto3.BinaryFormat {
+				size = int16(pgType.ScanType().Size())
+			} else {
+				size = -1
+			}
 		} else {
 			oid, err = VitessTypeToObjectID(c.Type.Type())
 			if err != nil {
 				panic(err)
 			}
+			size = int16(c.Type.MaxTextResponseByteLength(ctx))
+			format = 0
 		}
 
 		// "Format" field: The format code being used for the field.
@@ -359,9 +422,9 @@ func schemaToFieldDescriptions(ctx *sql.Context, s sql.Schema) []pgproto3.FieldD
 			TableOID:             uint32(0),
 			TableAttributeNumber: uint16(0),
 			DataTypeOID:          oid,
-			DataTypeSize:         int16(c.Type.MaxTextResponseByteLength(ctx)),
+			DataTypeSize:         size,
 			TypeModifier:         int32(-1), // TODO: used for domain type, which we don't support yet
-			Format:               int16(0),
+			Format:               format,
 		}
 	}
 
@@ -430,7 +493,7 @@ func resultForMax1RowIter(ctx *sql.Context, schema sql.Schema, iter sql.RowIter,
 
 // resultForDefaultIter reads batches of rows from the iterator
 // and writes results into the callback function.
-func (h *DoltgresHandler) resultForDefaultIter(ctx *sql.Context, schema sql.Schema, iter sql.RowIter, callback func(*Result) error, resultFields []pgproto3.FieldDescription) (r *Result, processedAtLeastOneBatch bool, returnErr error) {
+func (h *DuckHandler) resultForDefaultIter(ctx *sql.Context, schema sql.Schema, iter sql.RowIter, callback func(*Result) error, resultFields []pgproto3.FieldDescription) (r *Result, processedAtLeastOneBatch bool, returnErr error) {
 	defer trace.StartRegion(ctx, "DoltgresHandler.resultForDefaultIter").End()
 
 	eg, ctx := ctx.NewErrgroup()
@@ -570,6 +633,16 @@ func rowToBytes(ctx *sql.Context, s sql.Schema, row sql.Row) ([][]byte, error) {
 	for i, v := range row {
 		if v == nil {
 			o[i] = nil
+			continue
+		}
+
+		// TODO(fan): Preallocate the buffer
+		if pgType, ok := s[i].Type.(PostgresType); ok {
+			bytes, err := pgType.Encode(v, []byte{})
+			if err != nil {
+				return nil, err
+			}
+			o[i] = bytes
 		} else {
 			val, err := s[i].Type.SQL(ctx, []byte{}, v)
 			if err != nil {

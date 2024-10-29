@@ -48,6 +48,17 @@ func init() {
 	if _, ok := os.LookupEnv("DOLTGRES_ENABLE_AUTHENTICATION"); ok {
 		EnableAuthentication = true
 	}
+
+	auth.DropRole("doltgres")
+
+	var err error
+	mysql := auth.CreateDefaultRole("mysql")
+	mysql.CanLogin = true
+	mysql.Password, err = auth.NewScramSha256Password("")
+	if err != nil {
+		panic(err)
+	}
+	auth.SetRole(mysql)
 }
 
 // SASLBindingFlag are the flags for gs2-cbind-flag, used in SASL authentication.

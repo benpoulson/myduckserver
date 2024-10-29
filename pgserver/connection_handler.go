@@ -23,6 +23,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"unicode"
 
 	"github.com/apecloud/myduckserver/backend"
 	"github.com/dolthub/go-mysql-server/server"
@@ -40,7 +41,7 @@ type ConnectionHandler struct {
 	mysqlConn          *mysql.Conn
 	preparedStatements map[string]PreparedStatementData
 	portals            map[string]PortalData
-	doltgresHandler    *DoltgresHandler
+	doltgresHandler    *DuckHandler
 	backend            *pgproto3.Backend
 	pgTypeMap          *pgtype.Map
 	waitForSync        bool
@@ -78,7 +79,7 @@ func NewConnectionHandler(conn net.Conn, handler mysql.Handler, server *server.S
 
 	// TODO: possibly should define engine and session manager ourselves
 	//  instead of depending on the GetRunningServer method.
-	doltgresHandler := &DoltgresHandler{
+	doltgresHandler := &DuckHandler{
 		e:                 server.Engine,
 		sm:                server.SessionManager(),
 		readTimeout:       0,     // cfg.ConnReadTimeout,
@@ -249,7 +250,7 @@ func (h *ConnectionHandler) chooseInitialDatabase(startupMessage *pgproto3.Start
 	if !dbSpecified {
 		db = h.mysqlConn.User
 	}
-	useStmt := fmt.Sprintf("SET database TO '%s';", db)
+	useStmt := fmt.Sprintf("USE %s;", db)
 	parsed, err := sql.GlobalParser.ParseSimple(useStmt)
 	if err != nil {
 		return err
@@ -338,6 +339,7 @@ func (h *ConnectionHandler) receiveMessage() (bool, error) {
 // |endOfMessages| response parameter is true, it indicates that no more messages are expected for the current operation
 // and a READY FOR QUERY message should be sent back to the client, so it can send the next query.
 func (h *ConnectionHandler) handleMessage(msg pgproto3.Message) (stop, endOfMessages bool, err error) {
+	logrus.Infof("Handling message: %T", msg)
 	switch message := msg.(type) {
 	case *pgproto3.Terminate:
 		return true, false, nil
@@ -1029,10 +1031,25 @@ func (h *ConnectionHandler) convertQuery(query string) (ConvertedQuery, error) {
 	// 		StatementTag: stmtTag,
 	// 	}, nil
 	// }
+
+	ast, err := sql.GlobalParser.ParseSimple(query)
+	if err != nil {
+		ast, _ = sql.GlobalParser.ParseSimple("SELECT 'incompatible query' AS error")
+	}
+
+	query = sql.RemoveSpaceAndDelimiter(query, ';')
+	var stmtTag string
+	for i, c := range query {
+		if unicode.IsSpace(c) {
+			stmtTag = strings.ToUpper(query[:i])
+			break
+		}
+	}
+
 	return ConvertedQuery{
-		String: query,
-		// AST:          nil,
-		// StatementTag: stmtTag,
+		String:       query,
+		AST:          ast,
+		StatementTag: stmtTag,
 	}, nil
 }
 
