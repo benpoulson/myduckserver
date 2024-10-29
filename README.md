@@ -65,11 +65,11 @@ docker run \
   --network=host \
   --privileged \
   --workdir=/home/admin \
-  --env=setup_mode=replica_only \
-  --env=mysql_host=<mysql_host> \
-  --env=mysql_port=<mysql_port> \
-  --env=mysql_user=<mysql_user> \
-  --env=mysql_password=<mysql_password> \
+  --env=SETUP_MODE=REPLICA_ONLY \
+  --env=MYSQL_HOST=<mysql_host> \
+  --env=MYSQL_PORT=<mysql_port> \
+  --env=MYSQL_USER=<mysql_user> \
+  --env=MYSQL_PASSWORD=<mysql_password> \
   --detach=true \
   apecloud-registry.cn-zhangjiakou.cr.aliyuncs.com/apecloud/myduckserver:latest
 ```
@@ -83,11 +83,11 @@ docker run \
   --network=host \
   --privileged \
   --workdir=/home/admin \
-  --env=setup_mode=combined \
-  --env=mysql_host=<mysql_host> \
-  --env=mysql_port=<mysql_port> \
-  --env=mysql_user=<mysql_user> \
-  --env=mysql_password=<mysql_password> \
+  --env=SETUP_MODE=combined \
+  --env=MYSQL_HOST=<mysql_host> \
+  --env=MYSQL_PORT=<mysql_port> \
+  --env=MYSQL_USER=<mysql_user> \
+  --env=MYSQL_PASSWORD=<mysql_password> \
   --detach=true \
   apecloud-registry.cn-zhangjiakou.cr.aliyuncs.com/apecloud/myduckserver:latest
 ```

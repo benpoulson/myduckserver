@@ -7,15 +7,15 @@ export PID_FILE="${LOG_PATH}/myDuckServer.pid"
 
 # Function to run replica setup
 run_replica_setup() {
-    if [ -z "$mysql_host" ] || [ -z "$mysql_port" ] || [ -z "$mysql_user" ] || [ -z "$mysql_password" ]; then
+    if [ -z "$MYSQL_HOST" ] || [ -z "$MYSQL_PORT" ] || [ -z "$MYSQL_PORT" ] || [ -z "$MYSQL_PASSWORD" ]; then
         echo "Error: Missing required MySQL connection variables for replica setup."
         exit 1
     fi
-    echo "Creating replica with MySQL server at $mysql_host:$mysql_port..."
+    echo "Creating replica with MySQL server at $MYSQL_HOST:$MYSQL_PORT..."
     cd "$REPLICA_SETUP_PATH" || { echo "Error: Could not change directory to ${REPLICA_SETUP_PATH}"; exit 1; }
 
     # Run replica_setup.sh and check for errors
-    if bash replica_setup.sh --mysql_host "$mysql_host" --mysql_port "$mysql_port" --mysql_user "$mysql_user" --mysql_password "$mysql_password"; then
+    if bash replica_setup.sh --mysql_host "$MYSQL_HOST" --mysql_port "$MYSQL_PORT" --mysql_user "$MYSQL_PORT" --mysql_password "$MYSQL_PASSWORD"; then
         echo "Replica setup completed."
     else
         echo "Error: Replica setup failed."
@@ -78,33 +78,33 @@ check_process_alive() {
 setup() {
     mkdir -p "${DATA_PATH}"
     mkdir -p "${LOG_PATH}"
-    case "$setup_mode" in
-        "" | "server_only")
-            echo "Starting MyDuckServer in server_only mode..."
+    case "$SETUP_MODE" in
+        "" | "SERVER_ONLY")
+            echo "Starting MyDuckServer in SERVER_ONLY mode..."
             run_server
             ;;
 
-        "replica_only")
-            echo "Running in replica_only mode..."
+        "REPLICA_ONLY")
+            echo "Running in REPLICA_ONLY mode..."
             run_replica_setup
             ;;
 
-        "combined")
-            echo "Starting MyDuckServer and running replica setup in combined mode..."
+        "COMBINED")
+            echo "Starting MyDuckServer and running replica setup in COMBINED mode..."
             run_server
             wait_for_my_duck_server_ready
             run_replica_setup
             ;;
 
         *)
-            echo "Error: Invalid setup_mode value. Valid options are: server_only, replica_only, combined."
+            echo "Error: Invalid setup_mode value. Valid options are: SERVER_ONLY, REPLICA_ONLY, COMBINED."
             exit 1
             ;;
     esac
 }
 
 setup
-while [[ "$setup_mode" != "replica_only" ]]; do
+while [[ "$SETUP_MODE" != "REPLICA_ONLY" ]]; do
     # Check if the processes have started
     check_process_alive "$PID_FILE" "MyDuckServer"
     MY_DUCK_SERVER_STATUS=$?
