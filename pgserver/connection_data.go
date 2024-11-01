@@ -17,6 +17,7 @@ package pgserver
 import (
 	"fmt"
 
+	"github.com/cockroachdb/cockroachdb-parser/pkg/sql/sem/tree"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/vitess/go/vt/proto/query"
 	vitess "github.com/dolthub/vitess/go/vt/sqlparser"
@@ -64,7 +65,7 @@ type copyFromStdinState struct {
 	// copyFromStdinNode stores the original CopyFrom statement that initiated the CopyData message sequence. This
 	// node is used to look at what parameters were specified, such as which table to load data into, file format,
 	// delimiters, etc.
-	// copyFromStdinNode *node.CopyFrom
+	copyFromStdinNode *tree.CopyFrom
 	// dataLoader is the implementation of DataLoader that is used to load each individual CopyData chunk into the
 	// target table.
 	dataLoader DataLoader

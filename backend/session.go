@@ -37,6 +37,11 @@ func NewSession(base *memory.Session, provider *catalog.DatabaseProvider, pool *
 	return &Session{base, provider, pool}
 }
 
+// Provider returns the database provider for the session.
+func (sess Session) Provider() *catalog.DatabaseProvider {
+	return sess.db
+}
+
 // NewSessionBuilder returns a session builder for the given database provider.
 func NewSessionBuilder(provider *catalog.DatabaseProvider, pool *ConnectionPool) func(ctx context.Context, conn *mysql.Conn, addr string) (sql.Session, error) {
 	return func(ctx context.Context, conn *mysql.Conn, addr string) (sql.Session, error) {

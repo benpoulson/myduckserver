@@ -15,6 +15,8 @@
 package pgserver
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -26,6 +28,7 @@ import (
 	"unicode"
 
 	"github.com/apecloud/myduckserver/backend"
+	"github.com/cockroachdb/cockroachdb-parser/pkg/sql/sem/tree"
 	"github.com/dolthub/go-mysql-server/server"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/vitess/go/mysql"
@@ -339,7 +342,7 @@ func (h *ConnectionHandler) receiveMessage() (bool, error) {
 // |endOfMessages| response parameter is true, it indicates that no more messages are expected for the current operation
 // and a READY FOR QUERY message should be sent back to the client, so it can send the next query.
 func (h *ConnectionHandler) handleMessage(msg pgproto3.Message) (stop, endOfMessages bool, err error) {
-	logrus.Infof("Handling message: %T", msg)
+	logrus.Tracef("Handling message: %T", msg)
 	switch message := msg.(type) {
 	case *pgproto3.Terminate:
 		return true, false, nil
@@ -621,60 +624,61 @@ func (h *ConnectionHandler) handleCopyDataHelper(message *pgproto3.CopyData) (st
 		return false, true, fmt.Errorf("COPY DATA message received without a COPY FROM STDIN operation in progress")
 	}
 
-	// // Grab a sql.Context and ensure the session has a transaction started, otherwise the copied data
-	// // won't get committed correctly.
-	// sqlCtx, err := h.doltgresHandler.NewContext(context.Background(), h.mysqlConn, "")
-	// if err != nil {
-	// 	return false, false, err
-	// }
-	// if err = startTransaction(sqlCtx); err != nil {
-	// 	return false, false, err
-	// }
+	// Grab a sql.Context and ensure the session has a transaction started, otherwise the copied data
+	// won't get committed correctly.
+	sqlCtx, err := h.doltgresHandler.NewContext(context.Background(), h.mysqlConn, "")
+	if err != nil {
+		return false, false, err
+	}
+	if err = startTransaction(sqlCtx); err != nil {
+		return false, false, err
+	}
 
-	// dataLoader := h.copyFromStdinState.dataLoader
-	// if dataLoader == nil {
-	// 	copyFromStdinNode := h.copyFromStdinState.copyFromStdinNode
-	// 	if copyFromStdinNode == nil {
-	// 		return false, false, fmt.Errorf("no COPY FROM STDIN node found")
-	// 	}
+	dataLoader := h.copyFromStdinState.dataLoader
+	if dataLoader == nil {
+		copyFromStdinNode := h.copyFromStdinState.copyFromStdinNode
+		if copyFromStdinNode == nil {
+			return false, false, fmt.Errorf("no COPY FROM STDIN node found")
+		}
 
-	// 	// TODO: It would be better to get the table from the copyFromStdinNode – not by calling core.GetSqlTableFromContext
-	// 	table, err := core.GetSqlTableFromContext(sqlCtx, copyFromStdinNode.DatabaseName, copyFromStdinNode.TableName)
-	// 	if err != nil {
-	// 		return false, true, err
-	// 	}
-	// 	if table == nil {
-	// 		return false, true, fmt.Errorf(`relation "%s" does not exist`, copyFromStdinNode.TableName.String())
-	// 	}
-	// 	insertableTable, ok := table.(sql.InsertableTable)
-	// 	if !ok {
-	// 		return false, true, fmt.Errorf(`table "%s" is read-only`, copyFromStdinNode.TableName.String())
-	// 	}
+		// TODO: It would be better to get the table from the copyFromStdinNode – not by calling core.GetSqlTableFromContext
+		schemaName := copyFromStdinNode.Table.Schema()
+		tableName := copyFromStdinNode.Table.Table()
+		table, err := GetSqlTableFromContext(sqlCtx, schemaName, tableName)
+		if err != nil {
+			return false, true, err
+		}
+		if table == nil {
+			return false, true, fmt.Errorf(`relation "%s" does not exist`, tableName)
+		}
+		insertableTable, ok := table.(sql.InsertableTable)
+		if !ok {
+			return false, true, fmt.Errorf(`table "%s" is read-only`, tableName)
+		}
 
-	// 	switch copyFromStdinNode.CopyOptions.CopyFormat {
-	// 	case tree.CopyFormatText:
-	// 		dataLoader, err = dataloader.NewTabularDataLoader(sqlCtx, insertableTable, copyFromStdinNode.CopyOptions.Delimiter, "", copyFromStdinNode.CopyOptions.Header)
-	// 	case tree.CopyFormatCsv:
-	// 		dataLoader, err = dataloader.NewCsvDataLoader(sqlCtx, insertableTable, copyFromStdinNode.CopyOptions.Delimiter, copyFromStdinNode.CopyOptions.Header)
-	// 	case tree.CopyFormatBinary:
-	// 		err = fmt.Errorf("BINARY format is not supported for COPY FROM")
-	// 	default:
-	// 		err = fmt.Errorf("unknown format specified for COPY FROM: %v",
-	// 			copyFromStdinNode.CopyOptions.CopyFormat)
-	// 	}
+		switch copyFromStdinNode.Options.CopyFormat {
+		case tree.CopyFormatText:
+		case tree.CopyFormatCSV:
+			dataLoader, err = NewCsvDataLoader(sqlCtx, insertableTable, &copyFromStdinNode.Options)
+		case tree.CopyFormatBinary:
+			err = fmt.Errorf("BINARY format is not supported for COPY FROM")
+		default:
+			err = fmt.Errorf("unknown format specified for COPY FROM: %v",
+				copyFromStdinNode.Options.CopyFormat)
+		}
 
-	// 	if err != nil {
-	// 		return false, false, err
-	// 	}
+		if err != nil {
+			return false, false, err
+		}
 
-	// 	h.copyFromStdinState.dataLoader = dataLoader
-	// }
+		h.copyFromStdinState.dataLoader = dataLoader
+	}
 
-	// byteReader := bytes.NewReader(message.Data)
-	// reader := bufio.NewReader(byteReader)
-	// if err = dataLoader.LoadChunk(sqlCtx, reader); err != nil {
-	// 	return false, false, err
-	// }
+	byteReader := bytes.NewReader(message.Data)
+	reader := bufio.NewReader(byteReader)
+	if err = dataLoader.LoadChunk(sqlCtx, reader); err != nil {
+		return false, false, err
+	}
 
 	// We expect to see more CopyData messages until we see either a CopyDone or CopyFail message, so
 	// return false for endOfMessages
