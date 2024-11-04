@@ -20,7 +20,6 @@ import (
 	"github.com/cockroachdb/cockroachdb-parser/pkg/sql/sem/tree"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/vitess/go/vt/proto/query"
-	vitess "github.com/dolthub/vitess/go/vt/sqlparser"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/lib/pq/oid"
 )
@@ -54,7 +53,7 @@ const (
 // otherwise always prefer to AST.
 type ConvertedQuery struct {
 	String       string
-	AST          vitess.Statement
+	AST          tree.Statement
 	StatementTag string
 }
 
