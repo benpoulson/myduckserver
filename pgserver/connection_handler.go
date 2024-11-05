@@ -1058,7 +1058,7 @@ func (h *ConnectionHandler) handleCopyFromStdinQuery(copyFrom *tree.CopyFrom, co
 		return err
 	}
 
-	if err := validateCopyFrom(copyFrom, sqlCtx); err != nil {
+	if err := ValidateCopyFrom(copyFrom, sqlCtx); err != nil {
 		return err
 	}
 
