@@ -38,7 +38,7 @@ func NewSession(base *memory.Session, provider *catalog.DatabaseProvider, pool *
 }
 
 // Provider returns the database provider for the session.
-func (sess Session) Provider() *catalog.DatabaseProvider {
+func (sess *Session) Provider() *catalog.DatabaseProvider {
 	return sess.db
 }
 
@@ -56,7 +56,13 @@ func NewSessionBuilder(provider *catalog.DatabaseProvider, pool *ConnectionPool)
 		client := sql.Client{Address: host, User: user, Capabilities: conn.Capabilities}
 		baseSession := sql.NewBaseSessionWithClientServer(addr, client, conn.ConnectionID)
 		memSession := memory.NewSession(baseSession, provider)
-		return Session{memSession, provider, pool}, nil
+
+		schema := pool.CurrentSchema(conn.ConnectionID)
+		if schema != "" && schema != "main" {
+			memSession.SetCurrentDatabase(schema)
+		}
+
+		return &Session{memSession, provider, pool}, nil
 	}
 }
 
@@ -72,7 +78,7 @@ type Transaction struct {
 var _ sql.Transaction = (*Transaction)(nil)
 
 // StartTransaction implements sql.TransactionSession.
-func (sess Session) StartTransaction(ctx *sql.Context, tCharacteristic sql.TransactionCharacteristic) (sql.Transaction, error) {
+func (sess *Session) StartTransaction(ctx *sql.Context, tCharacteristic sql.TransactionCharacteristic) (sql.Transaction, error) {
 	sess.GetLogger().Trace("StartTransaction")
 	base, err := sess.Session.StartTransaction(ctx, tCharacteristic)
 	if err != nil {
@@ -103,7 +109,7 @@ func (sess Session) StartTransaction(ctx *sql.Context, tCharacteristic sql.Trans
 }
 
 // CommitTransaction implements sql.TransactionSession.
-func (sess Session) CommitTransaction(ctx *sql.Context, tx sql.Transaction) error {
+func (sess *Session) CommitTransaction(ctx *sql.Context, tx sql.Transaction) error {
 	sess.GetLogger().Trace("CommitTransaction")
 	transaction := tx.(*Transaction)
 	if transaction.tx != nil {
@@ -117,7 +123,7 @@ func (sess Session) CommitTransaction(ctx *sql.Context, tx sql.Transaction) erro
 }
 
 // Rollback implements sql.TransactionSession.
-func (sess Session) Rollback(ctx *sql.Context, tx sql.Transaction) error {
+func (sess *Session) Rollback(ctx *sql.Context, tx sql.Transaction) error {
 	sess.GetLogger().Trace("Rollback")
 	transaction := tx.(*Transaction)
 	if transaction.tx != nil {
@@ -131,7 +137,7 @@ func (sess Session) Rollback(ctx *sql.Context, tx sql.Transaction) error {
 }
 
 // PersistGlobal implements sql.PersistableSession.
-func (sess Session) PersistGlobal(sysVarName string, value interface{}) error {
+func (sess *Session) PersistGlobal(sysVarName string, value interface{}) error {
 	if _, _, ok := sql.SystemVariables.GetGlobal(sysVarName); !ok {
 		return sql.ErrUnknownSystemVariable.New(sysVarName)
 	}
@@ -145,7 +151,7 @@ func (sess Session) PersistGlobal(sysVarName string, value interface{}) error {
 }
 
 // RemovePersistedGlobal implements sql.PersistableSession.
-func (sess Session) RemovePersistedGlobal(sysVarName string) error {
+func (sess *Session) RemovePersistedGlobal(sysVarName string) error {
 	_, err := sess.ExecContext(
 		context.Background(),
 		catalog.InternalTables.PersistentVariable.DeleteStmt(),
@@ -155,13 +161,13 @@ func (sess Session) RemovePersistedGlobal(sysVarName string) error {
 }
 
 // RemoveAllPersistedGlobals implements sql.PersistableSession.
-func (sess Session) RemoveAllPersistedGlobals() error {
+func (sess *Session) RemoveAllPersistedGlobals() error {
 	_, err := sess.ExecContext(context.Background(), "DELETE FROM "+catalog.InternalTables.PersistentVariable.Name)
 	return err
 }
 
 // GetPersistedValue implements sql.PersistableSession.
-func (sess Session) GetPersistedValue(k string) (interface{}, error) {
+func (sess *Session) GetPersistedValue(k string) (interface{}, error) {
 	var value, vtype string
 	err := sess.QueryRow(
 		context.Background(),
@@ -189,36 +195,36 @@ func (sess Session) GetPersistedValue(k string) (interface{}, error) {
 }
 
 // GetConn implements adapter.ConnectionHolder.
-func (sess Session) GetConn(ctx context.Context) (*stdsql.Conn, error) {
+func (sess *Session) GetConn(ctx context.Context) (*stdsql.Conn, error) {
 	return sess.pool.GetConnForSchema(ctx, sess.ID(), sess.GetCurrentDatabase())
 }
 
 // GetCatalogConn implements adapter.ConnectionHolder.
-func (sess Session) GetCatalogConn(ctx context.Context) (*stdsql.Conn, error) {
+func (sess *Session) GetCatalogConn(ctx context.Context) (*stdsql.Conn, error) {
 	return sess.pool.GetConn(ctx, sess.ID())
 }
 
 // GetTxn implements adapter.ConnectionHolder.
-func (sess Session) GetTxn(ctx context.Context, options *stdsql.TxOptions) (*stdsql.Tx, error) {
+func (sess *Session) GetTxn(ctx context.Context, options *stdsql.TxOptions) (*stdsql.Tx, error) {
 	return sess.pool.GetTxn(ctx, sess.ID(), sess.GetCurrentDatabase(), options)
 }
 
 // GetCatalogTxn implements adapter.ConnectionHolder.
-func (sess Session) GetCatalogTxn(ctx context.Context, options *stdsql.TxOptions) (*stdsql.Tx, error) {
+func (sess *Session) GetCatalogTxn(ctx context.Context, options *stdsql.TxOptions) (*stdsql.Tx, error) {
 	return sess.pool.GetTxn(ctx, sess.ID(), "", options)
 }
 
 // TryGetTxn implements adapter.ConnectionHolder.
-func (sess Session) TryGetTxn() *stdsql.Tx {
+func (sess *Session) TryGetTxn() *stdsql.Tx {
 	return sess.pool.TryGetTxn(sess.ID())
 }
 
 // CloseTxn implements adapter.ConnectionHolder.
-func (sess Session) CloseTxn() {
+func (sess *Session) CloseTxn() {
 	sess.pool.CloseTxn(sess.ID())
 }
 
-func (sess Session) ExecContext(ctx context.Context, query string, args ...any) (stdsql.Result, error) {
+func (sess *Session) ExecContext(ctx context.Context, query string, args ...any) (stdsql.Result, error) {
 	conn, err := sess.GetCatalogConn(ctx)
 	if err != nil {
 		return nil, err
@@ -226,7 +232,7 @@ func (sess Session) ExecContext(ctx context.Context, query string, args ...any) 
 	return conn.ExecContext(ctx, query, args...)
 }
 
-func (sess Session) QueryRow(ctx context.Context, query string, args ...any) *stdsql.Row {
+func (sess *Session) QueryRow(ctx context.Context, query string, args ...any) *stdsql.Row {
 	conn, err := sess.GetCatalogConn(ctx)
 	if err != nil {
 		return nil

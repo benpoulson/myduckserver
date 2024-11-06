@@ -58,6 +58,8 @@ type CsvDataLoader struct {
 	err      atomic.Pointer[error]
 }
 
+var _ DataLoader = (*CsvDataLoader)(nil)
+
 func NewCsvDataLoader(sqlCtx *sql.Context, handler *DuckHandler, table sql.InsertableTable, columns tree.NameList, options *tree.CopyOptions) (DataLoader, error) {
 	duckBuilder := handler.e.Analyzer.ExecBuilder.(*backend.DuckBuilder)
 	dataDir := duckBuilder.Provider().DataDir()
@@ -69,12 +71,8 @@ func NewCsvDataLoader(sqlCtx *sql.Context, handler *DuckHandler, table sql.Inser
 	}
 	pipeName := strconv.Itoa(int(sqlCtx.ID())) + ".pipe"
 	pipePath := filepath.Join(pipeDir, pipeName)
+	sqlCtx.GetLogger().Traceln("Creating FIFO pipe for COPY operation:", pipePath)
 	if err := syscall.Mkfifo(pipePath, 0600); err != nil {
-		return nil, err
-	}
-
-	pipe, err := os.OpenFile(pipePath, os.O_WRONLY, 0600)
-	if err != nil {
 		return nil, err
 	}
 
@@ -89,12 +87,21 @@ func NewCsvDataLoader(sqlCtx *sql.Context, handler *DuckHandler, table sql.Inser
 		columns:  columns,
 		options:  options,
 		pipePath: pipePath,
-		pipe:     pipe,
 		rowCount: make(chan int64, 1),
 	}
 
 	// Execute the DuckDB COPY statement in a goroutine.
-	go loader.executeCopy()
+	sql := loader.buildSQL()
+	loader.ctx.GetLogger().Trace(sql)
+	go loader.executeCopy(sql)
+
+	// Open the pipe for writing.
+	// This operation will block until the reader opens the pipe for reading.
+	pipe, err := os.OpenFile(pipePath, os.O_WRONLY, 0600)
+	if err != nil {
+		return nil, err
+	}
+	loader.pipe = pipe
 
 	return loader, nil
 }
@@ -148,10 +155,8 @@ func (loader *CsvDataLoader) buildSQL() string {
 	return b.String()
 }
 
-func (loader *CsvDataLoader) executeCopy() {
+func (loader *CsvDataLoader) executeCopy(sql string) {
 	defer close(loader.rowCount)
-	sql := loader.buildSQL()
-	loader.ctx.GetLogger().Trace(sql)
 	result, err := adapter.Exec(loader.ctx, sql)
 	if err != nil {
 		loader.ctx.GetLogger().Error(err)
