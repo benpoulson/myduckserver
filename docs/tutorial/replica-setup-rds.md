@@ -1,6 +1,6 @@
 # Prepare
 
-MyDuckServer supports setting up replicas from a variety of MySQL-based databases, including AWS RDS for MySQL, AWS Aurora for MySQL, Aliyun RDS, Azure Database for MySQL, ApeCloud WeSQL, and MySQL Community Edition.
+MyDuckServer supports setting up replicas from a variety of MySQL-based databases, including AWS RDS for MySQL, AWS Aurora for MySQL, Aliyun RDS, Azure Database for MySQL, [ApeCloud WeSQL](https://wesql.io/), and MySQL Community Edition.
 
 ## Step 1: Verify BINLOG and GTID Configuration
 
