@@ -30,7 +30,7 @@ type Handler interface {
 	// ComExecuteBound is called when a connection receives a request to execute a prepared statement that has already bound to a set of values.
 	ComExecuteBound(ctx context.Context, conn *mysql.Conn, query string, boundQuery mysql.BoundQuery, callback func(*Result) error) error
 	// ComPrepareParsed is called when a connection receives a prepared statement query that has already been parsed.
-	ComPrepareParsed(ctx context.Context, c *mysql.Conn, query string, parsed tree.Statement) (mysql.ParsedQuery, []pgproto3.FieldDescription, error)
+	ComPrepareParsed(ctx context.Context, c *mysql.Conn, query string, parsed tree.Statement) ([]pgproto3.FieldDescription, error)
 	// ComQuery is called when a connection receives a query. Note the contents of the query slice may change
 	// after the first call to callback. So the DoltgresHandler should not hang on to the byte slice.
 	ComQuery(ctx context.Context, c *mysql.Conn, query string, parsed tree.Statement, callback func(*Result) error) error

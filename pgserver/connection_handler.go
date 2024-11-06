@@ -83,7 +83,7 @@ func NewConnectionHandler(conn net.Conn, handler mysql.Handler, server *server.S
 
 	// TODO: possibly should define engine and session manager ourselves
 	//  instead of depending on the GetRunningServer method.
-	doltgresHandler := &DuckHandler{
+	duckHandler := &DuckHandler{
 		e:                 server.Engine,
 		sm:                server.SessionManager(),
 		readTimeout:       0,     // cfg.ConnReadTimeout,
@@ -94,7 +94,7 @@ func NewConnectionHandler(conn net.Conn, handler mysql.Handler, server *server.S
 		mysqlConn:          mysqlConn,
 		preparedStatements: preparedStatements,
 		portals:            portals,
-		duckHandler:        doltgresHandler,
+		duckHandler:        duckHandler,
 		backend:            pgproto3.NewBackend(conn, conn),
 		pgTypeMap:          pgtype.NewMap(),
 	}
@@ -630,14 +630,14 @@ func (h *ConnectionHandler) handleCopyDataHelper(message *pgproto3.CopyData) (st
 
 	dataLoader := h.copyFromStdinState.dataLoader
 	if dataLoader == nil {
-		copyFromStdinNode := h.copyFromStdinState.copyFromStdinNode
-		if copyFromStdinNode == nil {
+		copyFrom := h.copyFromStdinState.copyFromStdinNode
+		if copyFrom == nil {
 			return false, false, fmt.Errorf("no COPY FROM STDIN node found")
 		}
 
 		// TODO: It would be better to get the table from the copyFromStdinNode – not by calling core.GetSqlTableFromContext
-		schemaName := copyFromStdinNode.Table.Schema()
-		tableName := copyFromStdinNode.Table.Table()
+		schemaName := copyFrom.Table.Schema()
+		tableName := copyFrom.Table.Table()
 		table, err := GetSqlTableFromContext(sqlCtx, schemaName, tableName)
 		if err != nil {
 			return false, true, err
@@ -650,15 +650,15 @@ func (h *ConnectionHandler) handleCopyDataHelper(message *pgproto3.CopyData) (st
 			return false, true, fmt.Errorf(`table "%s" is read-only`, tableName)
 		}
 
-		switch copyFromStdinNode.Options.CopyFormat {
+		switch copyFrom.Options.CopyFormat {
 		case tree.CopyFormatText:
 		case tree.CopyFormatCSV:
-			dataLoader, err = NewCsvDataLoader(sqlCtx, insertableTable, &copyFromStdinNode.Options)
+			dataLoader, err = NewCsvDataLoader(sqlCtx, h.duckHandler, insertableTable, copyFrom.Columns, &copyFrom.Options)
 		case tree.CopyFormatBinary:
 			err = fmt.Errorf("BINARY format is not supported for COPY FROM")
 		default:
 			err = fmt.Errorf("unknown format specified for COPY FROM: %v",
-				copyFromStdinNode.Options.CopyFormat)
+				copyFrom.Options.CopyFormat)
 		}
 
 		if err != nil {

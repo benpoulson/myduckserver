@@ -2,14 +2,18 @@ package pgserver
 
 import (
 	"bufio"
+	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/apecloud/myduckserver/adapter"
+	"github.com/apecloud/myduckserver/backend"
 	"github.com/cockroachdb/cockroachdb-parser/pkg/sql/sem/tree"
 	"github.com/dolthub/go-mysql-server/sql"
 )
@@ -40,13 +44,30 @@ type LoadDataResults struct {
 	RowsLoaded int32
 }
 
-func NewCsvDataLoader(ctx *sql.Context, table sql.InsertableTable, options *tree.CopyOptions) (DataLoader, error) {
+var ErrCopyAborted = fmt.Errorf("COPY operation aborted")
+
+type CsvDataLoader struct {
+	ctx      *sql.Context
+	cancel   context.CancelFunc
+	table    sql.InsertableTable
+	columns  tree.NameList
+	options  *tree.CopyOptions
+	pipePath string
+	pipe     *os.File
+	rowCount chan int64
+	err      atomic.Pointer[error]
+}
+
+func NewCsvDataLoader(sqlCtx *sql.Context, handler *DuckHandler, table sql.InsertableTable, columns tree.NameList, options *tree.CopyOptions) (DataLoader, error) {
+	duckBuilder := handler.e.Analyzer.ExecBuilder.(*backend.DuckBuilder)
+	dataDir := duckBuilder.Provider().DataDir()
+
 	// Create the FIFO pipe
-	pipeDir := filepath.Join("/tmp", "pipes", "load-data")
+	pipeDir := filepath.Join(dataDir, "pipes", "load-data")
 	if err := os.MkdirAll(pipeDir, 0755); err != nil {
 		return nil, err
 	}
-	pipeName := strconv.Itoa(int(ctx.ID())) + ".pipe"
+	pipeName := strconv.Itoa(int(sqlCtx.ID())) + ".pipe"
 	pipePath := filepath.Join(pipeDir, pipeName)
 	if err := syscall.Mkfifo(pipePath, 0600); err != nil {
 		return nil, err
@@ -57,87 +78,139 @@ func NewCsvDataLoader(ctx *sql.Context, table sql.InsertableTable, options *tree
 		return nil, err
 	}
 
+	// Create cancelable context
+	childCtx, cancel := context.WithCancel(sqlCtx)
+	sqlCtx.Context = childCtx
+
 	loader := &CsvDataLoader{
-		ctx:      ctx,
+		ctx:      sqlCtx,
+		cancel:   cancel,
 		table:    table,
+		columns:  columns,
 		options:  options,
 		pipePath: pipePath,
 		pipe:     pipe,
+		rowCount: make(chan int64, 1),
 	}
 
-	// Start the INSERT execution in a separate goroutine.
-	go func() {
-		// Build the DuckDB INSERT INTO statement.
-		var b strings.Builder
-		b.Grow(256)
-
-		b.WriteString("INSERT INTO ")
-		b.WriteString(loader.table.Name())
-		b.WriteString(" FROM read_csv('")
-		b.WriteString(loader.pipePath)
-		b.WriteString("', auto_detect = false, header = false, null_padding = true")
-
-		if loader.options.Delimiter != nil {
-			b.WriteString(", sep = ")
-			b.WriteString(singleQuotedDuckChar(loader.options.Delimiter.String()))
-		}
-
-		if loader.options.Quote != nil {
-			b.WriteString(", quote = ")
-			b.WriteString(singleQuotedDuckChar(loader.options.Quote.RawString()))
-		}
-
-		if loader.options.Escape != nil {
-			b.WriteString(", escape = ")
-			b.WriteString(singleQuotedDuckChar(loader.options.Escape.RawString()))
-		}
-
-		b.WriteString(")")
-
-		// Execute the DuckDB INSERT INTO statement.
-		duckSQL := b.String()
-		ctx.GetLogger().Trace(duckSQL)
-
-		result, err := adapter.Exec(ctx, duckSQL)
-		if err != nil {
-			ctx.GetLogger().Error(err)
-			return
-		}
-
-		_, err = result.RowsAffected()
-		if err != nil {
-			ctx.GetLogger().Error(err)
-			return
-		}
-	}()
+	// Execute the DuckDB COPY statement in a goroutine.
+	go loader.executeCopy()
 
 	return loader, nil
 }
 
-type CsvDataLoader struct {
-	ctx      *sql.Context
-	table    sql.InsertableTable
-	options  *tree.CopyOptions
-	pipePath string
-	pipe     *os.File
+// buildSQL builds the DuckDB COPY FROM statement.
+func (loader *CsvDataLoader) buildSQL() string {
+	var b strings.Builder
+	b.Grow(256)
+
+	b.WriteString("COPY ")
+	b.WriteString(loader.table.Name())
+
+	if len(loader.columns) > 0 {
+		b.WriteString(" (")
+		b.WriteString(loader.columns.String())
+		b.WriteString(")")
+	}
+
+	b.WriteString(" FROM '")
+	b.WriteString(loader.pipePath)
+	b.WriteString("' (AUTO_DETECT false,")
+
+	options := loader.options
+
+	if options.HasHeader && options.Header {
+		b.WriteString(" HEADER")
+	}
+
+	if options.Delimiter != nil {
+		b.WriteString(", SEP ")
+		b.WriteString(options.Delimiter.String())
+	}
+
+	if options.Quote != nil {
+		b.WriteString(", QUOTE ")
+		b.WriteString(singleQuotedDuckChar(options.Quote.RawString()))
+	}
+
+	if options.Escape != nil {
+		b.WriteString(", ESCAPE ")
+		b.WriteString(singleQuotedDuckChar(options.Escape.RawString()))
+	}
+
+	if options.Null != nil {
+		b.WriteString(", NULLSTR ")
+		b.WriteString(loader.options.Null.String())
+	}
+
+	b.WriteString(")")
+
+	return b.String()
+}
+
+func (loader *CsvDataLoader) executeCopy() {
+	defer close(loader.rowCount)
+	sql := loader.buildSQL()
+	loader.ctx.GetLogger().Trace(sql)
+	result, err := adapter.Exec(loader.ctx, sql)
+	if err != nil {
+		loader.ctx.GetLogger().Error(err)
+		loader.err.Store(&err)
+		return
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		loader.ctx.GetLogger().Error(err)
+		loader.err.Store(&err)
+		return
+	}
+	loader.rowCount <- rows
 }
 
 func (loader *CsvDataLoader) LoadChunk(ctx *sql.Context, data *bufio.Reader) error {
+	if errp := loader.err.Load(); errp != nil {
+		return fmt.Errorf("COPY operation has been aborted: %w", *errp)
+	}
 	// Write the data to the FIFO pipe.
 	_, err := io.Copy(loader.pipe, data)
-	return err
+	if err != nil {
+		ctx.GetLogger().Error("Copying data to pipe failed:", err)
+		loader.Abort(ctx)
+		return err
+	}
+	return nil
 }
 
 func (loader *CsvDataLoader) Abort(ctx *sql.Context) error {
-	loader.pipe.Close()
-	return os.Remove(loader.pipePath)
+	defer os.Remove(loader.pipePath)
+	loader.err.Store(&ErrCopyAborted)
+	loader.cancel()
+	<-loader.rowCount // Ensure the reader has exited
+	return loader.pipe.Close()
 }
 
 func (loader *CsvDataLoader) Finish(ctx *sql.Context) (*LoadDataResults, error) {
-	loader.pipe.Close()
-	// Since the INSERT is done in NewCsvDataLoader, we just need to return the results here.
+	defer os.Remove(loader.pipePath)
+
+	if errp := loader.err.Load(); errp != nil {
+		return nil, *errp
+	}
+
+	// Close the pipe to signal the reader to exit
+	if err := loader.pipe.Close(); err != nil {
+		return nil, err
+	}
+
+	rows := <-loader.rowCount
+
+	// Now the reader has exited, check the error again
+	if errp := loader.err.Load(); errp != nil {
+		return nil, *errp
+	}
+
 	return &LoadDataResults{
-		RowsLoaded: 0, // This should be updated to reflect the actual rows loaded.
+		RowsLoaded: int32(rows),
 	}, nil
 }
 
