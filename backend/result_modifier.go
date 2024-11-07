@@ -9,6 +9,11 @@ import (
 // ResultModifier is a function type that transforms a Result
 type ResultModifier func(*sqltypes.Result) *sqltypes.Result
 
+var (
+	replicaRegex = regexp.MustCompile(`^Replica_`)
+	sourceRegex  = regexp.MustCompile(`Source`)
+)
+
 // replaceFieldNames modifies field names to maintain compatibility with older MySQL clients
 // by replacing "Replica_" with "Slave_" and "Source" with "Master"
 func replaceShowSlaveStatusFieldNames(result *sqltypes.Result) *sqltypes.Result {
@@ -19,12 +24,12 @@ func replaceShowSlaveStatusFieldNames(result *sqltypes.Result) *sqltypes.Result 
 	for i, field := range result.Fields {
 		name := field.Name
 		// Replace any "Replica_" with "Slave_"
-		if regexp.MustCompile(`^Replica_`).MatchString(name) {
-			result.Fields[i].Name = regexp.MustCompile(`^Replica_`).ReplaceAllString(name, "Slave_")
+		if replicaRegex.MatchString(name) {
+			result.Fields[i].Name = replicaRegex.ReplaceAllString(name, "Slave_")
 		}
 		// Replace any "Source" with "Master"
-		if regexp.MustCompile(`Source`).MatchString(name) {
-			result.Fields[i].Name = regexp.MustCompile(`Source`).ReplaceAllString(name, "Master")
+		if sourceRegex.MatchString(name) {
+			result.Fields[i].Name = sourceRegex.ReplaceAllString(name, "Master")
 		}
 	}
 	return result
