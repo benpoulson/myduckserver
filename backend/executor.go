@@ -114,6 +114,8 @@ func (b *DuckBuilder) Build(ctx *sql.Context, root sql.Node, r sql.Row) (sql.Row
 	// SubqueryAlias is for select * from view
 	case *plan.ResolvedTable, *plan.SubqueryAlias, *plan.TableAlias:
 		return b.executeQuery(ctx, node, conn)
+	case *plan.Distinct, *plan.OrderedDistinct:
+		return b.executeQuery(ctx, node, conn)
 	case sql.Expressioner:
 		return b.executeExpressioner(ctx, node, conn)
 	case *plan.DeleteFrom:

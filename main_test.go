@@ -387,17 +387,6 @@ func TestQueriesSimple(t *testing.T) {
 		"select_field(i,_'1',_'2',_'3')_from_mytable;",
 		"select_char(i,_i_+_10,_pi())_from_mytable;",
 		"select_length(random_bytes(i))_from_mytable;",
-
-		// New failed queries in DuckDB 1.1.3
-		"select_distinct_pk1_from_two_pk_order_by_pk1",
-		"select_distinct_pk1_from_two_pk_order_by_pk2",
-		"select_distinct_pk2_from_two_pk_order_by_pk1",
-		"select_distinct_pk1,_pk2_from_two_pk_order_by_pk1",
-		"select_distinct_pk1,_pk2_from_two_pk_order_by_pk2",
-		"select_distinct_pk1,_pk2_from_two_pk_order_by_pk1,_pk2",
-		"select_distinct_pk2,_pk1_from_two_pk_order_by_pk1,_pk2",
-		"select_distinct_pk1_+_1_from_two_pk_order_by_pk1_+_1",
-		"select_distinct_pk2_+_1_from_two_pk_order_by_pk2_+_1",
 	}
 
 	// failed during CI
