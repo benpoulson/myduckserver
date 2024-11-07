@@ -392,6 +392,8 @@ func TestQueriesSimple(t *testing.T) {
 	// Order undefined
 	undefinedOrderQueries := []string{
 		// partial order by, the order of remaining columns is undefined
+		"select_distinct_pk1_from_two_pk_order_by_pk2",
+		"select_distinct_pk2_from_two_pk_order_by_pk1",
 		"select_distinct_pk1,_pk2_from_two_pk_order_by_pk1",
 		"select_distinct_pk1,_pk2_from_two_pk_order_by_pk2",
 	}
