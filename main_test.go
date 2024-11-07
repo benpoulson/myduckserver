@@ -389,6 +389,13 @@ func TestQueriesSimple(t *testing.T) {
 		"select_length(random_bytes(i))_from_mytable;",
 	}
 
+	// Order undefined
+	undefinedOrderQueries := []string{
+		// partial order by, the order of remaining columns is undefined
+		"select_distinct_pk1,_pk2_from_two_pk_order_by_pk1",
+		"select_distinct_pk1,_pk2_from_two_pk_order_by_pk2",
+	}
+
 	// failed during CI
 	waitForFixQueries = append(waitForFixQueries,
 		"SELECT_TAN(i)_from_mytable_order_by_i_limit_1", // might be precision issue
@@ -401,6 +408,7 @@ func TestQueriesSimple(t *testing.T) {
 	}
 
 	harness.QueriesToSkip(notApplicableQueries...)
+	harness.QueriesToSkip(undefinedOrderQueries...)
 	harness.QueriesToSkip(waitForFixQueries...)
 	harness.QueriesToSkip(panicQueries...)
 	enginetest.TestQueries(t, harness)
