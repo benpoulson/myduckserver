@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/sirupsen/logrus"
+
 	adapter "github.com/apecloud/myduckserver/adapter"
 	"github.com/apecloud/myduckserver/catalog"
 	"github.com/dolthub/go-mysql-server/memory"
@@ -42,6 +44,10 @@ func (sess *Session) Provider() *catalog.DatabaseProvider {
 	return sess.db
 }
 
+func (sess *Session) CurrentSchemaOfUnderlyingConn() string {
+	return sess.pool.CurrentSchema(sess.ID())
+}
+
 // NewSessionBuilder returns a session builder for the given database provider.
 func NewSessionBuilder(provider *catalog.DatabaseProvider, pool *ConnectionPool) func(ctx context.Context, conn *mysql.Conn, addr string) (sql.Session, error) {
 	return func(ctx context.Context, conn *mysql.Conn, addr string) (sql.Session, error) {
@@ -58,7 +64,8 @@ func NewSessionBuilder(provider *catalog.DatabaseProvider, pool *ConnectionPool)
 		memSession := memory.NewSession(baseSession, provider)
 
 		schema := pool.CurrentSchema(conn.ConnectionID)
-		if schema != "" && schema != "main" {
+		if schema != "" {
+			logrus.Traceln("SessionBuilder: new session: current schema:", schema)
 			memSession.SetCurrentDatabase(schema)
 		}
 

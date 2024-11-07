@@ -54,12 +54,12 @@ func (p *ConnectionPool) CurrentSchema(id uint32) string {
 		return ""
 	}
 	conn := entry.(*stdsql.Conn)
-	var currentSchema string
-	if err := conn.QueryRowContext(context.Background(), "SELECT CURRENT_SCHEMA()").Scan(&currentSchema); err != nil {
+	var schema string
+	if err := conn.QueryRowContext(context.Background(), "SELECT CURRENT_SCHEMA()").Scan(&schema); err != nil {
 		logrus.WithError(err).Error("Failed to get current schema")
 		return ""
 	}
-	return currentSchema
+	return schema
 }
 
 func (p *ConnectionPool) GetConn(ctx context.Context, id uint32) (*stdsql.Conn, error) {

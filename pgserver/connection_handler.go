@@ -430,7 +430,7 @@ func (h *ConnectionHandler) handleQueryOutsideEngine(query ConvertedQuery) (hand
 		// We send endOfMessages=false since the server will be in COPY DATA mode and won't
 		// be ready for more queries util COPY DATA mode is completed.
 		if stmt.Stdin {
-			return true, false, h.handleCopyFromStdinQuery(stmt, h.Conn())
+			return true, false, h.handleCopyFromStdinQuery(query, stmt, h.Conn())
 		}
 	}
 	return false, true, nil
@@ -1052,11 +1052,12 @@ func (h *ConnectionHandler) discardAll(query ConvertedQuery) error {
 // handleCopyFromStdinQuery handles the COPY FROM STDIN query at the Doltgres layer, without passing it to the engine.
 // COPY FROM STDIN can't be handled directly by the GMS engine, since COPY FROM STDIN relies on multiple messages sent
 // over the wire.
-func (h *ConnectionHandler) handleCopyFromStdinQuery(copyFrom *tree.CopyFrom, conn net.Conn) error {
-	sqlCtx, err := h.duckHandler.NewContext(context.Background(), h.mysqlConn, "")
+func (h *ConnectionHandler) handleCopyFromStdinQuery(query ConvertedQuery, copyFrom *tree.CopyFrom, conn net.Conn) error {
+	sqlCtx, err := h.duckHandler.NewContext(context.Background(), h.mysqlConn, query.String)
 	if err != nil {
 		return err
 	}
+	sqlCtx.SetLogger(sqlCtx.GetLogger().WithField("query", query.String))
 
 	if err := ValidateCopyFrom(copyFrom, sqlCtx); err != nil {
 		return err

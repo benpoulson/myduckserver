@@ -201,14 +201,14 @@ func (h *DuckHandler) NewContext(ctx context.Context, c *mysql.Conn, query strin
 var queryLoggingRegex = regexp.MustCompile(`[\r\n\t ]+`)
 
 func (h *DuckHandler) doQuery(ctx context.Context, c *mysql.Conn, query string, parsed tree.Statement, analyzedPlan sql.Node, queryExec QueryExecutor, callback func(*Result) error) error {
-	logrus.WithFields(logrus.Fields{
-		"query": query,
-	}).Info("doQuery")
-
 	sqlCtx, err := h.sm.NewContextWithQuery(ctx, c, query)
 	if err != nil {
 		return err
 	}
+	sqlCtx.GetLogger().WithFields(logrus.Fields{
+		"query":    query,
+		"protocol": "postgres",
+	}).Trace("doQuery")
 
 	start := time.Now()
 	var queryStrToLog string
@@ -243,6 +243,11 @@ func (h *DuckHandler) doQuery(ctx context.Context, c *mysql.Conn, query string, 
 		}
 		sqlCtx.GetLogger().WithError(err).Warn("error running query")
 		return err
+	}
+
+	// If the query is "USE <database>", we need to update the current database in the session.
+	if currentSchema := sqlCtx.Session.(*backend.Session).CurrentSchemaOfUnderlyingConn(); len(currentSchema) > 0 {
+		sqlCtx.SetCurrentDatabase(currentSchema)
 	}
 
 	// create result before goroutines to avoid |ctx| racing

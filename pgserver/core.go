@@ -27,6 +27,7 @@ func GetSqlDatabaseFromContext(ctx *sql.Context, database string) (sql.Database,
 	if len(database) == 0 {
 		database = ctx.GetCurrentDatabase()
 	}
+	ctx.GetLogger().Tracef("Getting database from context: %v", database)
 	db, err := session.Provider().Database(ctx, database)
 	if err != nil {
 		if sql.ErrDatabaseNotFound.Is(err) {
