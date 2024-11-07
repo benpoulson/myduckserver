@@ -17,7 +17,6 @@ package backend
 import (
 	"context"
 	"fmt"
-	"regexp"
 
 	"github.com/dolthub/go-mysql-server/server"
 	"github.com/dolthub/vitess/go/mysql"
@@ -28,13 +27,6 @@ type MyHandler struct {
 	*server.Handler
 	pool *ConnectionPool
 }
-
-// Precompile regex for performance
-var autoIncrementRegex = regexp.MustCompile(`(?i)AUTO_INCREMENT=\d+`)
-var showSlaveStatusRegex = regexp.MustCompile(`(?i)^show\s+slave\s+status\s*;?$`)
-
-// ResultModifier is a function type that transforms a Result
-type ResultModifier func(*sqltypes.Result) *sqltypes.Result
 
 func (h *MyHandler) ConnectionClosed(c *mysql.Conn) {
 	h.pool.CloseConn(c.ConnectionID)
@@ -60,39 +52,14 @@ func wrapResultCallback(callback mysql.ResultSpoolFn, modifiers ...ResultModifie
 	}
 }
 
-// replaceFieldNames modifies field names to maintain compatibility with older MySQL clients
-// by replacing "Replica_" with "Slave_" and "Source" with "Master"
-func replaceShowSlaveStatusFieldNames(result *sqltypes.Result) *sqltypes.Result {
-	if result == nil || result.Fields == nil {
-		return result
-	}
-
-	for i, field := range result.Fields {
-		name := field.Name
-		// Replace any "Replica_" with "Slave_"
-		if regexp.MustCompile(`^Replica_`).MatchString(name) {
-			result.Fields[i].Name = regexp.MustCompile(`^Replica_`).ReplaceAllString(name, "Slave_")
-		}
-		// Replace any "Source" with "Master"
-		if regexp.MustCompile(`Source`).MatchString(name) {
-			result.Fields[i].Name = regexp.MustCompile(`Source`).ReplaceAllString(name, "Master")
-		}
-	}
-	return result
-}
-
 func (h *MyHandler) ComMultiQuery(
 	ctx context.Context,
 	c *mysql.Conn,
 	query string,
 	callback mysql.ResultSpoolFn,
 ) (string, error) {
-	modifiers := []ResultModifier{}
-	query = autoIncrementRegex.ReplaceAllString(query, "")
-	if showSlaveStatusRegex.MatchString(query) {
-		modifiers = append(modifiers, replaceShowSlaveStatusFieldNames)
-		query = showSlaveStatusRegex.ReplaceAllString(query, "SHOW REPLICA STATUS;")
-	}
+	var modifiers []ResultModifier
+	query, modifiers = applyRequestModifiers(query, defaultRequestModifiers)
 
 	return h.Handler.ComMultiQuery(ctx, c, query, wrapResultCallback(callback, modifiers...))
 }
@@ -105,12 +72,8 @@ func (h *MyHandler) ComQuery(
 	query string,
 	callback mysql.ResultSpoolFn,
 ) error {
-	modifiers := []ResultModifier{}
-	query = autoIncrementRegex.ReplaceAllString(query, "")
-	if showSlaveStatusRegex.MatchString(query) {
-		modifiers = append(modifiers, replaceShowSlaveStatusFieldNames)
-		query = showSlaveStatusRegex.ReplaceAllString(query, "SHOW REPLICA STATUS;")
-	}
+	var modifiers []ResultModifier
+	query, modifiers = applyRequestModifiers(query, defaultRequestModifiers)
 
 	return h.Handler.ComQuery(ctx, c, query, wrapResultCallback(callback, modifiers...))
 }
