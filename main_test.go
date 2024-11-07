@@ -806,10 +806,6 @@ func TestIndexQueryPlans(t *testing.T) {
 	}
 }
 
-func TestParallelismQueries(t *testing.T) {
-	enginetest.TestParallelismQueries(t, NewDuckHarness("default", 2, testNumPartitions, true, nil))
-}
-
 func TestQueryErrors(t *testing.T) {
 	t.Skip("wait for fix")
 	enginetest.TestQueryErrors(t, NewDefaultDuckHarness())

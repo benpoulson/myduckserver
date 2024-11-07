@@ -4,7 +4,7 @@ go 1.23.2
 
 require (
 	github.com/Shopify/toxiproxy/v2 v2.9.0
-	github.com/apache/arrow/go/v17 v17.0.0
+	github.com/apache/arrow-go/v18 v18.0.0
 	github.com/cockroachdb/apd/v3 v3.2.1
 	github.com/cockroachdb/cockroachdb-parser v0.23.2
 	github.com/dolthub/doltgresql v0.13.0
@@ -34,7 +34,6 @@ require (
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/AdaLogics/go-fuzz-headers v0.0.0-20240806141605-e8a1dd7889d6 // indirect
 	github.com/DATA-DOG/go-sqlmock v1.5.2 // indirect
-	github.com/apache/arrow-go/v18 v18.0.0 // indirect
 	github.com/bazelbuild/rules_go v0.46.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/biogo/store v0.0.0-20201120204734-aad293a2328f // indirect
