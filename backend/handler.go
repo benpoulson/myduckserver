@@ -17,9 +17,10 @@ package backend
 import (
 	"context"
 	"fmt"
+	"regexp"
+
 	"github.com/dolthub/go-mysql-server/server"
 	"github.com/dolthub/vitess/go/mysql"
-	"regexp"
 )
 
 type MyHandler struct {
@@ -28,7 +29,8 @@ type MyHandler struct {
 }
 
 // Precompile regex for performance
-var autoIncrementRegex = regexp.MustCompile(`AUTO_INCREMENT=\d+`)
+var autoIncrementRegex = regexp.MustCompile(`(?i)AUTO_INCREMENT=\d+`)
+var showSlaveStatusRegex = regexp.MustCompile(`(?i)^show\s+slave\s+status\s*;?$`)
 
 func (h *MyHandler) ConnectionClosed(c *mysql.Conn) {
 	h.pool.CloseConn(c.ConnectionID)
@@ -43,6 +45,18 @@ func (h *MyHandler) ComInitDB(c *mysql.Conn, schemaName string) error {
 	return h.Handler.ComInitDB(c, schemaName)
 }
 
+func (h *MyHandler) ComMultiQuery(
+	ctx context.Context,
+	c *mysql.Conn,
+	query string,
+	callback mysql.ResultSpoolFn,
+) (string, error) {
+	query = autoIncrementRegex.ReplaceAllString(query, "")
+	query = showSlaveStatusRegex.ReplaceAllString(query, "SHOW REPLICA STATUS;")
+
+	return h.Handler.ComMultiQuery(ctx, c, query, callback)
+}
+
 // Naive query rewriting. This is just a temporary solution
 // and should be replaced with a more robust implementation.
 func (h *MyHandler) ComQuery(
@@ -52,6 +66,7 @@ func (h *MyHandler) ComQuery(
 	callback mysql.ResultSpoolFn,
 ) error {
 	query = autoIncrementRegex.ReplaceAllString(query, "")
+	query = showSlaveStatusRegex.ReplaceAllString(query, "SHOW REPLICA STATUS;")
 
 	return h.Handler.ComQuery(ctx, c, query, callback)
 }
